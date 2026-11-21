@@ -16,6 +16,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import abstract  # noqa: E402
 import validate as v  # noqa: E402
 
 PAYLOAD_VERSION = 1
@@ -64,7 +65,10 @@ def build_payload(doc, repo_dir="."):
     commits = recent_commits(repo_dir)
     if not commits:
         raise RuntimeError("仓库里没有提交")
+    text, source = abstract.extract(repo_dir, doc.get("abstract_file"))
     return {
+        "abstract": text or "",              # 论文摘要的纯文本，取自 abstract_source
+        "abstract_source": source or "",
         "payload_version": PAYLOAD_VERSION,
         "project_id": repo.split("/")[-1].lower(),
         "repo": repo,
@@ -95,6 +99,17 @@ def main(argv=None):
     payload = build_payload(doc, args.repo_dir)
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    if payload["abstract"]:
+        print(f"摘要取自 {payload['abstract_source']}（{len(payload['abstract'])} 字符）")
+    else:
+        wanted = doc.get("abstract_file")
+        msg = (f"{wanted} 里没有找到有效的摘要" if wanted else "没有找到论文摘要") + (
+            "，看板将显示 summary" if doc.get("summary")
+            else "，project.yaml 里也没有 summary；请补一句话说明")
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            print(f"::warning file={args.path}::{msg}")
+        else:
+            print(f"警告: {msg}", file=sys.stderr)
     print(f"已生成 {args.output}: {payload['project_id']} @ {payload['sha'][:7]}")
     return 0
 

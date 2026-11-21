@@ -99,6 +99,7 @@ function projectCard(p) {
       ${p.blocker_count ? `<span class="c-warn">${p.blocker_count} 个阻塞</span>` : ''}
       ${p.tags.length ? `<span>${p.tags.map(x => '#' + esc(x)).join(' ')}</span>` : ''}
     </div>
+    ${p.blurb ? `<p class="blurb">${esc(p.blurb)}</p>` : ''}
     ${t ? `<div class="target${t.firm ? '' : ' soft'}">
       <span>${(t.firm ? '<span class="pill firm">firm</span> ' : '') + esc(t.name)}</span>${targetWhen(t)}</div>` : ''}
   </a>`;
@@ -190,6 +191,10 @@ async function renderProject(id) {
     <p class="small"><a href="/">← 返回总览</a></p>
     <h1>${esc(p.title)} <span class="pill stage">${esc(STAGES[p.stage] || p.stage)}</span></h1>
     ${p.summary ? `<p class="muted">${esc(p.summary)}</p>` : ''}
+    ${p.abstract ? `<h2>摘要</h2><div class="card abstract">${
+      p.abstract.split(/\n\s*\n/).map(x => `<p>${esc(x)}</p>`).join('')}</div>`
+      : p.summary ? '' : '<p class="muted small">还没有摘要，也没有填写一句话说明。</p>'}
+    <h2>基本信息</h2>
     <div class="card"><dl class="kv">
       <dt>负责人</dt><dd>${esc(p.owner)}</dd>
       <dt>成员</dt><dd>${p.members.map(esc).join('、') || '—'}</dd>

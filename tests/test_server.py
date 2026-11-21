@@ -45,12 +45,13 @@ class ServerTest(unittest.TestCase):
         self.ctx.__exit__(None, None, None)
         srv.now_cst = self._real_now
 
-    def push(self, pid, days_ago=1, sha=None, secret="test-secret", ts=None, **project):
+    def push(self, pid, days_ago=1, sha=None, secret="test-secret", ts=None, abstract=None, **project):
         commit_at = (NOW - dt.timedelta(days=days_ago)).isoformat(timespec="seconds")
         sha = sha or (pid.encode().hex() + "0" * 40)[:40]
         body = json.dumps({
             "payload_version": 1, "project_id": pid, "repo": f"lab/{pid}", "sha": sha,
             "source": "push", "last_commit_at": commit_at,
+            **({} if abstract is None else {"abstract": abstract}),
             "project": {"schema": 1, "title": pid.upper(), "owner": "alice", "stage": "implementation",
                         **project},
             "commits": [{"sha": sha, "author": "a", "date": commit_at, "message": "m"}],
@@ -210,6 +211,29 @@ class ServerTest(unittest.TestCase):
         self.push("p1", stage="submitted", targets=[{"venue": "testconf27", "role": "submitted"}])
         self.assertIsNone(self.projects()["projects"][0]["next_target"])
         self.assertEqual(self.ids("?due=7"), [])
+
+    # ---- 摘要 ----
+    def test_abstract_is_stored_and_card_blurb_prefers_summary(self):
+        long_abs = "First paragraph of the abstract. " * 12 + "\n\nSecond paragraph."
+        self.push("with-abs", abstract=long_abs)
+        self.push("with-both", abstract=long_abs, summary="作者写的一句话")
+        self.push("with-none")
+        cards = {p["id"]: p["blurb"] for p in self.projects()["projects"]}
+        self.assertTrue(cards["with-abs"].startswith("First paragraph") and cards["with-abs"].endswith("…"))
+        self.assertLessEqual(len(cards["with-abs"]), 221)
+        self.assertEqual((cards["with-both"], cards["with-none"]), ("作者写的一句话", ""))
+        detail = self.c.get("/api/v1/projects/with-abs").json()["project"]
+        self.assertEqual(detail["abstract"], long_abs)
+        self.assertNotIn("abstract", self.projects()["projects"][0])      # 列表里不带全文
+        self.assertEqual(self.push("bad", abstract=["not", "text"]).status_code, 400)
+
+    def test_database_created_before_abstracts_is_upgraded(self):
+        with closing(srv.connect()) as con:
+            con.execute("ALTER TABLE projects DROP COLUMN abstract")
+            con.commit()
+        srv.init_db()
+        self.assertEqual(self.push("p1", abstract="x" * 100).status_code, 200)
+        self.assertEqual(self.c.get("/api/v1/projects/p1").json()["project"]["abstract"], "x" * 100)
 
     # ---- 访问密码 ----
     def test_view_password_protects_pages_but_not_ingest(self):

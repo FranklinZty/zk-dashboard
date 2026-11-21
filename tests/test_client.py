@@ -4,11 +4,13 @@ import datetime as dt
 import json
 import os
 import sys
+import tempfile
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "client", "lab_sync"))
 
+import abstract  # noqa: E402
 import signing  # noqa: E402
 import validate as v  # noqa: E402
 
@@ -117,6 +119,68 @@ class ValidateTest(unittest.TestCase):
         # 系列对不上仍然是错误
         errors, warnings = v.check_venues(doc, {"sp27"})
         self.assertEqual(len(errors), 1)
+
+
+class AbstractTest(unittest.TestCase):
+    def repo(self, files):
+        root = tempfile.mkdtemp()
+        for rel, text in files.items():
+            path = os.path.join(root, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+        return root
+
+    LONG = "This sentence pads the abstract so that it is long enough to count as a real one. "
+
+    def test_latex_becomes_plain_text(self):
+        tex = (r"We present \sys{}, a \emph{fast} scheme~\cite{KZG10} with $n \ge 2^{20}$ rows "
+               r"and 3--5$\times$ speed-up.\footnote{link} % trailing comment" "\n\n"
+               r"Second paragraph, 50\% smaller (see \cref{tab:x}).")
+        out = abstract.to_plain(tex, {"sys": r"\textsf{Vicuna}\xspace"})
+        self.assertEqual(out, "We present Vicuna, a fast scheme with n ≥ 2^20 rows and 3–5× speed-up."
+                              "\n\nSecond paragraph, 50% smaller.")
+
+    def test_extract_reads_environment_and_expands_project_macros(self):
+        root = self.repo({
+            "paper/main.tex": r"\newcommand{\sys}{\textsf{Vicuna}\xspace}" "\n\\input{sections/abstract}",
+            "paper/sections/abstract.tex":
+                "% header comment\n\\begin{abstract}\n" + self.LONG + r"We call it \sys{}."
+                + "\n\\keywords{a \\and b}\n\\end{abstract}\n",
+        })
+        text, src = abstract.extract(root)
+        self.assertEqual(src, "paper/sections/abstract.tex")
+        self.assertTrue(text.endswith("We call it Vicuna."), text)
+        self.assertNotIn("keywords", text)
+
+    def test_template_placeholder_and_short_text_are_not_abstracts(self):
+        root = self.repo({
+            "paper/sections/abstract.tex": "\\begin{abstract}<<Field consensus sentence.>> "
+                                           + self.LONG + "\\end{abstract}",
+            "main.tex": "\\begin{abstract}TODO\\end{abstract}",
+        })
+        self.assertEqual(abstract.extract(root), (None, None))
+
+    def test_falls_through_default_paths_and_honours_abstract_file(self):
+        root = self.repo({
+            "main.tex": "\\begin{abstract}" + self.LONG + "From main.\\end{abstract}",
+            "draft/abs.tex": "\\begin{abstract}" + self.LONG + "From draft.\\end{abstract}",
+        })
+        self.assertTrue(abstract.extract(root)[0].endswith("From main."))
+        text, src = abstract.extract(root, "draft/abs.tex")
+        self.assertEqual((text.endswith("From draft."), src), (True, "draft/abs.tex"))
+        self.assertEqual(abstract.extract(root, "missing.tex"), (None, None))
+
+    def test_long_abstract_is_capped(self):
+        root = self.repo({"abstract.tex": self.LONG * 100})
+        self.assertLessEqual(len(abstract.extract(root)[0]), abstract.MAX_CHARS + 1)
+
+    def test_abstract_file_field_is_validated(self):
+        self.assertEqual(v.validate({**base(), "abstract_file": "paper/sections/abstract.tex"}), [])
+        for bad in ("../secret.tex", "/etc/passwd.tex", "paper/abstract.md", 3):
+            self.assertTrue(v.validate({**base(), "abstract_file": bad}), bad)
+        out = v.normalize({**base(), "abstract_file": "a.tex"})
+        self.assertEqual((out["abstract_file"], v.validate(out)), ("a.tex", []))
 
 
 class SigningTest(unittest.TestCase):

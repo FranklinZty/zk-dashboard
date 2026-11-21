@@ -37,6 +37,7 @@ from . import ccfddl  # noqa: E402
 log = logging.getLogger("lab")
 CST = dt.timezone(dt.timedelta(hours=8))
 MAX_BODY = 1_000_000
+MAX_ABSTRACT = 6000
 SYNC_INTERVAL = 24 * 3600
 STALL_EXEMPT = {"submitted", "accepted", "paused"}   # 这些阶段不计入停滞
 PROJECT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,99}$")
@@ -63,6 +64,10 @@ def connect():
 def init_db():
     with closing(connect()) as con:
         con.executescript((HERE / "schema.sql").read_text(encoding="utf-8"))
+        # 旧库升级：CREATE TABLE IF NOT EXISTS 不会给已有的表加列
+        columns = {r["name"] for r in con.execute("PRAGMA table_info(projects)")}
+        if "abstract" not in columns:
+            con.execute("ALTER TABLE projects ADD COLUMN abstract TEXT NOT NULL DEFAULT ''")
         con.commit()
 
 
@@ -153,11 +158,13 @@ async def ingest(request: Request):
         pid, sha, repo = p["project_id"], p["sha"], p["repo"]
         project, commits = p["project"], p["commits"]
         last_commit_at = parse_ts(p["last_commit_at"]).isoformat(timespec="seconds")
-    except (ValueError, KeyError, TypeError):
+        abstract = p.get("abstract") or ""
+    except (ValueError, KeyError, TypeError, AttributeError):
         raise HTTPException(400, "payload 结构不正确")
     if not (isinstance(pid, str) and PROJECT_ID_RE.match(pid)
             and isinstance(sha, str) and SHA_RE.match(sha)
-            and isinstance(repo, str) and isinstance(commits, list)):
+            and isinstance(repo, str) and isinstance(commits, list)
+            and isinstance(abstract, str)):
         raise HTTPException(400, "payload 字段不合法")
     errors = pv.validate(project)
     if errors:
@@ -176,15 +183,17 @@ async def ingest(request: Request):
         if not stale:   # 迟到的旧提交只留快照，不覆盖当前状态
             dump = lambda v: json.dumps(v, ensure_ascii=False)
             con.execute(
-                "INSERT INTO projects (id, title, owner, stage, summary, members_json, tags_json, "
+                "INSERT INTO projects (id, title, owner, stage, summary, abstract, members_json, tags_json, "
                 "milestones_json, blockers_json, commits_json, repo, last_sha, last_commit_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
                 "title=excluded.title, owner=excluded.owner, stage=excluded.stage, summary=excluded.summary, "
+                "abstract=excluded.abstract, "
                 "members_json=excluded.members_json, tags_json=excluded.tags_json, "
                 "milestones_json=excluded.milestones_json, blockers_json=excluded.blockers_json, "
                 "commits_json=excluded.commits_json, repo=excluded.repo, last_sha=excluded.last_sha, "
                 "last_commit_at=excluded.last_commit_at, updated_at=excluded.updated_at",
                 (pid, project["title"], project["owner"], project["stage"], project.get("summary", ""),
+                 abstract[:MAX_ABSTRACT],
                  dump(project.get("members") or []), dump(project.get("tags") or []),
                  dump(project.get("milestones") or []), dump(project.get("blockers") or []),
                  dump(commits[:20]), repo, sha, last_commit_at, now_iso))
@@ -260,6 +269,12 @@ def resolve_target(t, deadlines, now):
     return out
 
 
+def blurb(row, limit=220):
+    """卡片上的简短说明：优先用作者写的一句话，没有就截取摘要开头。"""
+    text = row["summary"] or row["abstract"].split("\n\n")[0]
+    return text if len(text) <= limit else text[:limit].rstrip() + "…"
+
+
 def project_view(row, targets, deadlines, now, detail=False):
     last = parse_ts(row["last_commit_at"])
     days = max(0, days_between(now, last))
@@ -272,7 +287,7 @@ def project_view(row, targets, deadlines, now, detail=False):
     blockers = json.loads(row["blockers_json"])
     view = {
         "id": row["id"], "title": row["title"], "owner": row["owner"], "stage": row["stage"],
-        "summary": row["summary"], "members": json.loads(row["members_json"]),
+        "summary": row["summary"], "blurb": blurb(row), "members": json.loads(row["members_json"]),
         "tags": json.loads(row["tags_json"]), "repo": row["repo"], "last_sha": row["last_sha"],
         "last_commit_at": last.astimezone(CST).isoformat(timespec="seconds"),
         "days_since_commit": days, "stall_level": stall, "blocker_count": len(blockers),
@@ -282,7 +297,7 @@ def project_view(row, targets, deadlines, now, detail=False):
         "_last": last,
     }
     if detail:
-        view.update(blockers=blockers, milestones=json.loads(row["milestones_json"]),
+        view.update(abstract=row["abstract"], blockers=blockers, milestones=json.loads(row["milestones_json"]),
                     commits=json.loads(row["commits_json"]), targets=resolved)
     return view
 

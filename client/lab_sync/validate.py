@@ -28,11 +28,12 @@ CCFDDL_URL = "https://ccfddl.com/conference/allconf.yml"
 
 TOP_KEYS = {
     "schema", "title", "owner", "stage", "members", "tags",
-    "summary", "milestones", "blockers", "targets",
+    "summary", "abstract_file", "milestones", "blockers", "targets",
 }
 LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}$")
 TAG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 VENUE_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,39}$")
+TEX_PATH_RE = re.compile(r"^(?!/)(?!.*\.\.)[A-Za-z0-9._/ -]{1,200}\.tex$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -89,6 +90,10 @@ def validate(doc):
         errors.append(f"stage: 必须是 {' | '.join(STAGES)} 之一")
     if "summary" in doc and doc["summary"] is not None and not _is_str(doc["summary"], 300):
         errors.append("summary: 最多 300 字符，且不能为空字符串")
+
+    af = doc.get("abstract_file")
+    if af is not None and not (isinstance(af, str) and TEX_PATH_RE.match(af)):
+        errors.append("abstract_file: 必须是仓库内 .tex 文件的相对路径")
 
     members = _check_list(doc, "members", errors)
     for i, m in enumerate(members or []):
@@ -188,6 +193,8 @@ def normalize(doc):
     }
     if (doc.get("summary") or "").strip():
         out["summary"] = doc["summary"].strip()
+    if doc.get("abstract_file"):
+        out["abstract_file"] = doc["abstract_file"]
     return out   # 规范形式本身也能通过 validate()，服务端据此复验
 
 
