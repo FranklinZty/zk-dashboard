@@ -10,6 +10,7 @@ ccfddl 的原始时间带各自的时区（多数是 AoE，即 UTC-12）。这�
       url: https://example.org
       rounds:
         - due: "2027-02-01 19:59"
+          notification: "2027-04-01 19:59"   # 可选，录用通知
           comment: 可选
 
 手工条目与 ccfddl 的 id 相同时，以手工为准。
@@ -92,6 +93,7 @@ def parse_allconf(data, min_year, unknown_tz=None):
                 {
                     "due": to_cst(r.get("deadline"), tz),
                     "abstract_due": to_cst(r.get("abstract_deadline"), tz),
+                    "notification_due": to_cst(r.get("decision_deadline"), tz),
                     "comment": str(r.get("comment") or "")[:200],
                 }
                 for r in conf.get("timeline") or [] if isinstance(r, dict)
@@ -110,6 +112,7 @@ def parse_manual(data):
             {
                 "due": to_cst(str(r.get("due") or ""), CST),
                 "abstract_due": to_cst(str(r.get("abstract_due") or ""), CST),
+                "notification_due": to_cst(str(r.get("notification") or ""), CST),
                 "comment": str(r.get("comment") or "")[:200],
             }
             for r in e.get("rounds") or [] if isinstance(r, dict)
@@ -138,8 +141,9 @@ def _upsert(con, conf, source, now_iso):
         (conf["id"], conf["name"], conf["url"], conf["rank"], source, now_iso))
     con.execute("DELETE FROM deadline_rounds WHERE deadline_id=?", (conf["id"],))
     con.executemany(
-        "INSERT INTO deadline_rounds (deadline_id, idx, due, abstract_due, comment) VALUES (?,?,?,?,?)",
-        [(conf["id"], i, r["due"], r["abstract_due"], r["comment"])
+        "INSERT INTO deadline_rounds (deadline_id, idx, due, abstract_due, notification_due, comment) "
+        "VALUES (?,?,?,?,?,?)",
+        [(conf["id"], i, r["due"], r["abstract_due"], r["notification_due"], r["comment"])
          for i, r in enumerate(conf["rounds"])])
 
 

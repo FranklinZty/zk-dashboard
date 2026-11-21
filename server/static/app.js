@@ -33,9 +33,12 @@ function fmtDate(ymd) {
   const [y, m, d] = String(ymd).slice(0, 10).split('-').map(Number);
   return `${String(y) === thisYear() ? '' : y + '年'}${m}月${d}日`;
 }
+// 只有日期的值（YYYY-MM-DD）按北京时间当天结束算
+const instant = s => (String(s).length === 10 ? `${s}T23:59:59+08:00` : s);
+const fmtWhen = s => (String(s).length === 10 ? fmtDate(s) : fmtDateTime(s));
 // 剩余时间用浏览器本地时钟计算
 function leftText(iso) {
-  const ms = new Date(iso) - Date.now();
+  const ms = new Date(instant(iso)) - Date.now();
   if (ms < 0) return '已过';
   if (ms < 3600000) return '不足 1 小时';
   if (ms < DAY) return `还剩 ${Math.floor(ms / 3600000)} 小时`;
@@ -45,12 +48,24 @@ const isUrgent = iso => new Date(iso) - Date.now() < 7 * DAY;
 const agoText = d => (d === 0 ? '今天提交' : `${d} 天前提交`);
 
 // ---- 投稿目标的统一显示：会议 firm 醒目，期刊浅色，未收录显示待定 ----
+// 已投出（审稿中）的目标不再显示投稿截止，改为显示录用通知日期
+const inReview = t => t.status === 'review' || t.status === 'decided';
+function targetPill(t) {
+  if (t.status === 'review') return '<span class="pill review">审稿中</span> ';
+  if (t.status === 'decided') return '<span class="pill role">已出结果</span> ';
+  return t.firm ? '<span class="pill firm">firm</span> ' : '';
+}
 function targetName(t) {
   const url = safeUrl(t.url);
   const name = url ? `<a href="${url}" target="_blank" rel="noopener">${esc(t.name)}</a>` : esc(t.name);
-  return (t.firm ? '<span class="pill firm">firm</span> ' : '') + name;
+  return targetPill(t) + name;
 }
 function targetWhen(t) {
+  if (t.status === 'review') {
+    if (!t.notification) return '<span class="muted">录用通知：待定</span>';
+    return `<span class="c-accent">录用通知 ${fmtWhen(t.notification)} · ${leftText(t.notification)}</span>`;
+  }
+  if (t.status === 'decided') return `<span class="muted">录用通知已于 ${fmtWhen(t.notification)} 发出</span>`;
   if (t.status === 'tbd') return '<span class="muted">待定</span>';
   if (!t.due) return '<span class="muted">—</span>';
   if (!t.firm) {
@@ -101,22 +116,23 @@ function projectCard(p) {
       ${p.tags.length ? `<span>${p.tags.map(x => '#' + esc(x)).join(' ')}</span>` : ''}
     </div>
     ${p.blurb ? `<p class="blurb">${esc(p.blurb)}</p>` : ''}
-    ${t ? `<div class="target${t.firm ? '' : ' soft'}">
-      <span>${(t.firm ? '<span class="pill firm">firm</span> ' : '') + esc(t.name)}</span>${targetWhen(t)}</div>` : ''}
+    ${t ? `<div class="target${t.firm || inReview(t) ? '' : ' soft'}">
+      <span>${targetPill(t) + esc(t.name)}</span>${targetWhen(t)}</div>` : ''}
   </a>`;
 }
 
 function sidePanel(deadlines) {
-  const soon = deadlines.filter(d => d.status === 'upcoming' && d.days_left <= 14);
+  const soon = deadlines.filter(d => (d.status === 'upcoming' || (d.status === 'review' && d.notification))
+    && d.days_left <= 14);
   const items = soon.map(d => `<div class="side-item">
-      <div class="row"><span class="${d.firm ? '' : 'soft'}">${esc(d.name)}</span>
-        ${d.firm ? '<span class="pill firm">firm</span>' : ''}</div>
+      <div class="row"><span class="${d.firm || inReview(d) ? '' : 'soft'}">${esc(d.name)}</span>
+        ${targetPill(d)}</div>
       <div>${targetWhen(d)}</div>
       <div class="muted">${d.projects.map(p =>
         `<a href="/p/${encodeURIComponent(p.id)}">${esc(p.title)}</a>`).join('、')}</div>
     </div>`).join('');
   return `<aside class="card side"><h2>14 天内</h2>
-    ${items || '<p class="muted small">14 天内没有投稿日期。</p>'}
+    ${items || '<p class="muted small">14 天内没有投稿截止或录用通知。</p>'}
     <p class="small"><a href="/deadlines">查看全部投稿日程</a></p></aside>`;
 }
 
@@ -157,23 +173,26 @@ async function renderDeadlines() {
     ['30 天内', d => d.status === 'upcoming' && d.days_left > 7 && d.days_left <= 30],
     ['更晚', d => d.status === 'upcoming' && d.days_left > 30],
     ['待定', d => d.status === 'tbd'],
+    ['审稿中，等录用通知', d => d.status === 'review'],
+    ['已出结果', d => d.status === 'decided'],
     ['已过', d => d.status === 'past'],
   ];
   const table = rows => `<table><thead><tr><th>会议 / 期刊</th><th>日期</th><th>项目</th></tr></thead><tbody>
     ${rows.map(d => `<tr>
       <td>${targetName(d)}${d.comment ? `<div class="muted small">${esc(d.comment)}</div>` : ''}</td>
-      <td class="nowrap">${targetWhen(d)}${d.firm && d.abstract_due && d.abstract_due !== d.due
+      <td class="nowrap">${targetWhen(d)}${inReview(d) && d.due
+        ? `<div class="muted small">投稿截止 ${fmtWhen(d.due)}</div>` : ''}${!inReview(d) && d.firm && d.abstract_due && d.abstract_due !== d.due
         ? `<div class="muted small">摘要截稿 ${fmtDateTime(d.abstract_due)}</div>` : ''}</td>
       <td>${d.projects.map(p => `<a href="/p/${encodeURIComponent(p.id)}">${esc(p.title)}</a>
         <span class="pill role">${esc(ROLES[p.role] || p.role)}</span>`).join('<br>')}</td>
     </tr>`).join('')}</tbody></table>`;
   const sections = groups.map(([title, test]) => {
     const rows = deadlines.filter(test);
-    if (title === '已过') rows.reverse();
+    if (title === '已过' || title === '已出结果') rows.reverse();
     return rows.length ? `<h2>${title}（${rows.length}）</h2>${table(rows)}` : '';
   }).join('');
   app.innerHTML = `<h1>投稿日程</h1>
-    <p class="muted small">会议日期来自 ccfddl.com 并已换算为北京时间，标 firm 的是硬截稿；期刊为各项目自定的预计投稿日期。投稿前请以会议官网为准。</p>
+    <p class="muted small">会议日期来自 ccfddl.com 并已换算为北京时间，标 firm 的是硬截稿；期刊为各项目自定的预计投稿日期。已投出的项目显示录用通知日期。请以会议官网为准。</p>
     ${sections || '<div class="empty">还没有项目填写投稿目标。</div>'}`;
 }
 

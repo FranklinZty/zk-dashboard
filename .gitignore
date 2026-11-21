@@ -8,3 +8,4 @@ payload.json
 *.db-shm
 .env
 .DS_Store
+.claude/

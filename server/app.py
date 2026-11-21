@@ -68,10 +68,12 @@ def init_db():
     with closing(connect()) as con:
         con.executescript((HERE / "schema.sql").read_text(encoding="utf-8"))
         # 旧库升级：CREATE TABLE IF NOT EXISTS 不会给已有的表加列
-        columns = {r["name"] for r in con.execute("PRAGMA table_info(projects)")}
-        for column in ("abstract", "abstract_source"):
-            if column not in columns:
-                con.execute(f"ALTER TABLE projects ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+        for table, column, decl in (("projects", "abstract", "TEXT NOT NULL DEFAULT ''"),
+                                    ("projects", "abstract_source", "TEXT NOT NULL DEFAULT ''"),
+                                    ("project_targets", "notification", "TEXT"),
+                                    ("deadline_rounds", "notification_due", "TEXT")):
+            if column not in {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}:
+                con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
         con.commit()
 
 
@@ -232,10 +234,12 @@ async def ingest(request: Request):
             con.execute("DELETE FROM project_targets WHERE project_id=?", (pid,))
             for pos, t in enumerate(project.get("targets") or []):
                 kind = "venue" if "venue" in t else "journal"
-                planned = t.get("planned")
+                planned, notification = t.get("planned"), t.get("notification")
                 con.execute(
-                    "INSERT INTO project_targets (project_id, kind, ref, planned, role, pos) VALUES (?,?,?,?,?,?)",
-                    (pid, kind, t[kind].strip(), str(planned) if planned else None, t["role"], pos))
+                    "INSERT INTO project_targets (project_id, kind, ref, planned, notification, role, pos) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (pid, kind, t[kind].strip(), str(planned) if planned else None,
+                     str(notification) if notification else None, t["role"], pos))
         con.commit()
     return {"ok": True, "duplicate": duplicate, "stale": stale}
 
@@ -271,21 +275,68 @@ def guess_venue_name(venue_id, deadlines):
     return venue_id
 
 
-def resolve_target(t, deadlines, now):
+def parse_when(text):
+    """'YYYY-MM-DD'（当天结束）或带时间的 ISO 字符串 -> 北京时间 datetime。"""
+    return parse_ts(text + "T23:59:59" if len(text) == 10 else text)
+
+
+def review_keys(targets, stage):
+    """已投出、在等录用结果的目标。
+
+    role 为 submitted 的目标都算；阶段是 submitted 但作者没改 role 时，把 role 为 target 的算上。
+    """
+    submitted = [t for t in targets if t["role"] == "submitted"]
+    if not submitted and stage == "submitted":
+        submitted = [t for t in targets if t["role"] == "target"]
+    return {(t["kind"], t["ref"]) for t in submitted}
+
+
+def resolve_review(t, deadlines, now, out):
+    """审稿中的目标：不再显示投稿截止，改为显示录用通知日期。
+
+    通知日期优先用 project.yaml 里作者填的 notification，其次用数据源里所投那一轮的通知日期。
+    所投的那一轮 = 截稿已过的最后一轮（都没过就取第一轮）。
+    status: review（等通知）| decided（通知日期已过）
+    """
+    note = t.get("notification")
+    if t["kind"] == "venue":
+        d = deadlines.get(t["ref"])
+        dated = [r for r in (d["rounds"] if d else []) if r["due"]]
+        passed = [r for r in dated if parse_ts(r["due"]) <= now]
+        rnd = passed[-1] if passed else (dated[0] if dated else None)
+        if rnd:
+            out.update(due=rnd["due"], comment=rnd["comment"])
+            note = note or rnd.get("notification_due")
+    out["notification"] = note
+    out["status"] = "review"
+    if note:
+        when = parse_when(note)
+        out.update(days_left=days_between(when, now), _when=when,
+                   status="review" if when >= now else "decided")
+    return out
+
+
+def resolve_target(t, deadlines, now, review=False):
     """把一条 project_targets 记录变成页面要显示的形式。
 
     status: upcoming（未到）| past（已过）| tbd（会议日期待定）| submitted（已投出）
+            | review（审稿中，等录用通知）| decided（通知日期已过）
     firm:   会议为 True（硬截稿），期刊为 False（自定的预计日期）
     """
     out = {"kind": t["kind"], "role": t["role"], "firm": t["kind"] == "venue",
-           "due": None, "days_left": None, "url": "", "comment": "", "abstract_due": None}
-    if t["kind"] == "journal":
-        out.update(name=t["ref"], due=t["planned"])
-        when = parse_ts(t["planned"] + "T23:59:59")
-    else:
+           "due": None, "days_left": None, "url": "", "comment": "", "abstract_due": None,
+           "notification": None}
+    if t["kind"] == "venue":
         d = deadlines.get(t["ref"])
         out.update(id=t["ref"], name=d["name"] if d else guess_venue_name(t["ref"], deadlines),
                    url=d["url"] if d else "")
+    else:
+        out.update(name=t["ref"], due=t["planned"])
+    if review:
+        return resolve_review(t, deadlines, now, out)
+    if t["kind"] == "journal":
+        when = parse_when(t["planned"])
+    else:
         dated = [r for r in (d["rounds"] if d else []) if r["due"]]
         if not dated:
             out["status"] = "submitted" if t["role"] == "submitted" else "tbd"
@@ -325,11 +376,19 @@ def project_view(row, targets, deadlines, now, detail=False):
     last = parse_ts(row["last_commit_at"])
     days = max(0, days_between(now, last))
     stall = 0 if row["stage"] in STALL_EXEMPT else 2 if days > 14 else 1 if days > 7 else 0
-    resolved = [resolve_target(t, deadlines, now) for t in targets]
+    in_review = review_keys(targets, row["stage"])
+    resolved = [resolve_target(t, deadlines, now, (t["kind"], t["ref"]) in in_review) for t in targets]
     upcoming = sorted((t for t in resolved if t["status"] == "upcoming"), key=lambda t: t["_when"])
     firm = [t for t in upcoming if t["firm"]]
-    next_target = (upcoming[0] if upcoming
-                   else next((t for t in resolved if t["status"] == "tbd"), None))
+    reviewing = [t for t in resolved if t["status"] in ("review", "decided")]
+    if reviewing:   # 已投出：卡片上显示录用通知，不再显示投稿截止
+        waiting = sorted((t for t in reviewing if t["status"] == "review" and t.get("_when")),
+                         key=lambda t: t["_when"])
+        next_target = waiting[0] if waiting else next(
+            (t for t in reviewing if t["status"] == "review"), reviewing[0])
+    else:
+        next_target = (upcoming[0] if upcoming
+                       else next((t for t in resolved if t["status"] == "tbd"), None))
     blockers = json.loads(row["blockers_json"])
     view = {
         "id": row["id"], "title": row["title"], "owner": row["owner"], "stage": row["stage"],
@@ -421,16 +480,27 @@ def list_deadlines():
     now = now_cst()
     with closing(connect()) as con:
         deadlines = load_deadlines(con)
-        titles = {r["id"]: r["title"] for r in con.execute("SELECT id, title FROM projects")}
+        projects = {r["id"]: r for r in con.execute("SELECT id, title, stage FROM projects")}
+        titles = {pid: r["title"] for pid, r in projects.items()}
         rows = [dict(t) for t in con.execute("SELECT * FROM project_targets ORDER BY project_id, pos")]
+
+    by_project = {}
+    for t in rows:
+        by_project.setdefault(t["project_id"], []).append(t)
+    in_review = {pid: review_keys(ts, projects[pid]["stage"])
+                 for pid, ts in by_project.items() if pid in projects}
 
     items = {}
     for t in rows:
         if t["project_id"] not in titles:
             continue
-        key = ("venue", t["ref"]) if t["kind"] == "venue" else ("journal", t["ref"], t["project_id"])
+        review = (t["kind"], t["ref"]) in in_review[t["project_id"]]
+        # 同一会议合并成一条；审稿中的单独成条（显示录用通知），作者自填通知日期的按日期再分
+        key = (("venue", t["ref"]) if t["kind"] == "venue" else ("journal", t["ref"], t["project_id"]))
+        key += ("review", t.get("notification")) if review else ()
         if key not in items:
-            item = resolve_target({**t, "role": "target"}, deadlines, now)   # 条目状态与单个项目的角色无关
+            # 条目状态与单个项目的角色无关
+            item = resolve_target({**t, "role": "submitted" if review else "target"}, deadlines, now, review)
             item.pop("role")
             item["projects"] = []
             items[key] = item

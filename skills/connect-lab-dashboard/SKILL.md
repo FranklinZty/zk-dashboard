@@ -157,6 +157,8 @@ git -C <项目目录> remote -v
 
 用户说的目标和 `STATE.md` 不一致时，以用户为准。
 
+**已经投出的论文**：`stage: submitted`，所投目标 `role: submitted`。看板会改为显示录用通知日期，优先用目标上的 `notification: YYYY-MM-DD`，没有就用会议数据源里的日期。会议数据源有日期时不用填；期刊或数据源没有时，问用户是否知道通知日期，知道就填上，不知道就不填（看板显示「待定」）。
+
 **项目描述**由 CI 自动决定，按优先级取第一个有内容的：
 
 1. 论文摘要：从 `paper/sections/abstract.tex` 等约定路径提取。摘要在别的位置时，用 `abstract_file: 相对路径.tex` 指定。
@@ -243,6 +245,13 @@ ssh root@120.77.59.95 "sed -i 's/^LAB_ALLOWED_OWNERS=.*/LAB_ALLOWED_OWNERS=POLYU
 ## 以后改项目信息
 
 只改 `project.yaml`，提交并 push，看板随之更新，不需要再动工作流。改之前同样跑一遍第 3 步的校验。
+
+常见的改动：
+
+- **论文投出去了**：`stage` 改为 `submitted`，所投目标的 `role` 改为 `submitted`，可选填 `notification`。
+- **收到审稿意见在改**：`stage` 改为 `revision`。
+- **录用了**：`stage` 改为 `accepted`。
+- **被拒后改投**：`stage` 改回 `writing` 或 `revision`，原目标删掉或改为 `backup`，新目标 `role: target`。
 
 ## 不要做的事
 

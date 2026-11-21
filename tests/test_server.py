@@ -33,10 +33,12 @@ CST = dt.timezone(dt.timedelta(hours=8))
 NOW = dt.datetime(2026, 11, 21, 12, 0, tzinfo=CST)
 
 
-def ccfddl_data(deadline, cid="testconf27", tz="UTC-12"):
+def ccfddl_data(deadline, cid="testconf27", tz="UTC-12", decision=None, rounds=None):
+    timeline = rounds or [{"deadline": deadline, "comment": "main",
+                           **({"decision_deadline": decision} if decision else {})}]
     return [{"title": "TESTCONF", "rank": {"ccf": "A"}, "confs": [{
         "year": 2027, "id": cid, "link": "https://example.org", "timezone": tz,
-        "timeline": [{"deadline": deadline, "comment": "main"}]}]}]
+        "timeline": timeline}]}]
 
 
 class ServerTest(unittest.TestCase):
@@ -199,6 +201,68 @@ class ServerTest(unittest.TestCase):
         self.sync(None)
         self.assertEqual(self.projects()["projects"][0]["next_target"]["status"], "upcoming")
 
+    # ---- 投稿之后：显示录用通知 ----
+    def target(self, pid):
+        return next(p for p in self.projects()["projects"] if p["id"] == pid)["next_target"]
+
+    def test_submitted_project_shows_notification_instead_of_deadline(self):
+        # 已过截稿、通知在未来（NOW 是 2026-11-21）
+        self.sync(ccfddl_data("2026-09-17 23:59:59", decision="2027-01-18 23:59:59"))
+        self.push("by-role", stage="submitted", targets=[{"venue": "testconf27", "role": "submitted"}])
+        self.push("by-stage", stage="submitted", targets=[{"venue": "testconf27", "role": "target"}])
+        self.push("writing", stage="writing", targets=[{"venue": "testconf27", "role": "target"}])
+        for pid in ("by-role", "by-stage"):
+            t = self.target(pid)
+            self.assertEqual((t["status"], t["notification"]), ("review", "2027-01-19T19:59:59+08:00"), pid)
+            self.assertEqual(t["days_left"], 59)
+        writing = self.c.get("/api/v1/projects/writing").json()["project"]["targets"][0]
+        self.assertEqual((writing["status"], writing["notification"]), ("past", None))   # 没投出的照旧显示截止
+        self.assertEqual(self.ids("?due=365"), [])                     # 录用通知不算投稿截止
+
+    def test_author_notification_overrides_source_and_works_for_journals(self):
+        self.sync(ccfddl_data("2026-09-17 23:59:59", decision="2027-01-18 23:59:59"))
+        self.push("conf", stage="submitted",
+                  targets=[{"venue": "testconf27", "role": "submitted", "notification": "2027-02-01"}])
+        self.push("jour", stage="submitted",
+                  targets=[{"journal": "J", "planned": "2026-10-01", "role": "submitted",
+                            "notification": "2027-03-01"}])
+        self.push("unknown", stage="submitted", targets=[{"journal": "J2", "planned": "2026-10-01",
+                                                         "role": "submitted"}])
+        self.assertEqual(self.target("conf")["notification"], "2027-02-01")
+        self.assertEqual((self.target("jour")["status"], self.target("jour")["notification"]),
+                         ("review", "2027-03-01"))
+        self.assertEqual((self.target("unknown")["status"], self.target("unknown")["notification"]),
+                         ("review", None))
+
+    def test_notification_in_the_past_is_decided(self):
+        self.sync(ccfddl_data("2026-06-01 23:59:59", decision="2026-09-01 23:59:59"))
+        self.push("p1", stage="submitted", targets=[{"venue": "testconf27", "role": "submitted"}])
+        self.assertEqual(self.target("p1")["status"], "decided")
+
+    def test_multi_round_uses_the_round_that_was_submitted(self):
+        rounds = [{"deadline": "2026-08-01 23:59:59", "decision_deadline": "2026-12-01 23:59:59", "comment": "R1"},
+                  {"deadline": "2027-01-10 23:59:59", "decision_deadline": "2027-04-01 23:59:59", "comment": "R2"}]
+        self.sync(ccfddl_data(None, rounds=rounds))
+        self.push("sent", stage="submitted", targets=[{"venue": "testconf27", "role": "submitted"}])
+        self.push("next", stage="writing", targets=[{"venue": "testconf27", "role": "target"}])
+        self.assertEqual((self.target("sent")["comment"], self.target("sent")["notification"]),
+                         ("R1", "2026-12-02T19:59:59+08:00"))
+        self.assertEqual((self.target("next")["status"], self.target("next")["comment"]), ("upcoming", "R2"))
+
+    def test_schedule_lists_review_separately_from_deadline(self):
+        self.sync(ccfddl_data("2027-01-10 23:59:59", decision="2027-04-01 23:59:59"))
+        self.push("sent", stage="submitted", targets=[{"venue": "testconf27", "role": "submitted"}])
+        self.push("next", stage="writing", targets=[{"venue": "testconf27", "role": "target"}])
+        items = self.c.get("/api/v1/deadlines").json()["deadlines"]
+        got = sorted((i["status"], [p["id"] for p in i["projects"]]) for i in items)
+        self.assertEqual(got, [("review", ["sent"]), ("upcoming", ["next"])])
+
+    def test_manual_file_notification(self):
+        self.push("p1", stage="submitted", targets=[{"venue": "myws27", "role": "submitted"}])
+        self.sync(None, [{"id": "myws27", "name": "My WS", "rounds": [
+            {"due": "2026-11-01 20:00", "notification": "2026-12-15 12:00"}]}])
+        self.assertEqual(self.target("p1")["notification"], "2026-12-15T12:00:00+08:00")
+
     # ---- 停滞、筛选、排序 ----
     def test_stall_levels_and_exempt_stages(self):
         self.push("fresh", days_ago=3)
@@ -243,7 +307,8 @@ class ServerTest(unittest.TestCase):
     def test_submitted_target_is_not_treated_as_upcoming(self):
         self.sync(ccfddl_data("2026-11-25 23:59:59"))
         self.push("p1", stage="submitted", targets=[{"venue": "testconf27", "role": "submitted"}])
-        self.assertIsNone(self.projects()["projects"][0]["next_target"])
+        t = self.projects()["projects"][0]["next_target"]
+        self.assertEqual((t["status"], t["notification"]), ("review", None))
         self.assertEqual(self.ids("?due=7"), [])
 
     # ---- 摘要 ----
@@ -277,6 +342,8 @@ class ServerTest(unittest.TestCase):
         with closing(srv.connect()) as con:
             con.execute("ALTER TABLE projects DROP COLUMN abstract")
             con.execute("ALTER TABLE projects DROP COLUMN abstract_source")
+            con.execute("ALTER TABLE project_targets DROP COLUMN notification")
+            con.execute("ALTER TABLE deadline_rounds DROP COLUMN notification_due")
             con.commit()
         srv.init_db()
         self.assertEqual(self.push("p1", abstract="x" * 100).status_code, 200)

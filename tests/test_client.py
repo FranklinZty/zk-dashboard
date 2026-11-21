@@ -86,6 +86,9 @@ class ValidateTest(unittest.TestCase):
             {**base(), "targets": [{**conf, "journal": "J", "planned": "2027-01-01"}]},
             "二选一")
         self.assertInvalid({**base(), "targets": [{**conf, "role": "main"}]}, "role")
+        self.assertEqual(v.validate({**base(), "targets": [{**conf, "role": "submitted",
+                                                             "notification": "2027-01-18"}]}), [])
+        self.assertInvalid({**base(), "targets": [{**conf, "notification": "soon"}]}, "notification")
         self.assertInvalid({**base(), "targets": [conf, copy.deepcopy(conf)]}, "重复")
         self.assertInvalid(
             {**base(), "targets": [jour, {**jour, "journal": "ieee tifs"}]}, "重复")

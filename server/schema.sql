@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS project_targets (
     kind       TEXT NOT NULL CHECK (kind IN ('venue', 'journal')),
     ref        TEXT NOT NULL,
     planned    TEXT,
+    notification TEXT,                           -- 作者填写的录用通知日期，优先于数据源
     role       TEXT NOT NULL,
     pos        INTEGER NOT NULL,
     PRIMARY KEY (project_id, kind, ref)
@@ -59,6 +60,7 @@ CREATE TABLE IF NOT EXISTS deadline_rounds (
     idx          INTEGER NOT NULL,
     due          TEXT,
     abstract_due TEXT,
+    notification_due TEXT,                       -- 录用通知（ccfddl 的 decision_deadline）
     comment      TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (deadline_id, idx)
 );

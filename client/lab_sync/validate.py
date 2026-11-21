@@ -143,7 +143,9 @@ def validate(doc):
         if not isinstance(t, dict):
             errors.append(f"{where}: 必须是键值映射")
             continue
-        _check_keys(t, {"venue", "journal", "planned", "role"}, where, errors)
+        _check_keys(t, {"venue", "journal", "planned", "notification", "role"}, where, errors)
+        if t.get("notification") is not None and _date(t["notification"]) is None:
+            errors.append(f"{where}.notification: 必须是 YYYY-MM-DD")
         if t.get("role") not in TARGET_ROLES:
             errors.append(f"{where}.role: 必须是 {' | '.join(TARGET_ROLES)} 之一")
         has_venue, has_journal = "venue" in t, "journal" in t
@@ -189,7 +191,7 @@ def normalize(doc):
         "tags": list(doc.get("tags") or []),
         "milestones": [clean(m, ("due",)) for m in doc.get("milestones") or []],
         "blockers": [clean(b, ("since",)) for b in doc.get("blockers") or []],
-        "targets": [clean(t, ("planned",)) for t in doc.get("targets") or []],
+        "targets": [clean(t, ("planned", "notification")) for t in doc.get("targets") or []],
     }
     if (doc.get("summary") or "").strip():
         out["summary"] = doc["summary"].strip()

@@ -97,6 +97,24 @@ targets:
     role: target
 ```
 
+**投出之后**：把 `stage` 改成 `submitted`，所投目标的 `role` 改成 `submitted`。看板就不再显示投稿截止，改为显示**录用通知日期**。
+
+```yaml
+stage: submitted
+targets:
+  - venue: eurocrypt27
+    role: submitted
+    notification: 2027-01-18   # 可选，录用通知日期（北京时间）
+```
+
+录用通知日期的来源：
+
+1. `notification`：作者自己填的，优先使用。投稿系统里看到的日期可以填在这里。
+2. 会议的数据源（ccfddl.com）里所投那一轮的通知日期。多轮截稿时，按截稿已过的最后一轮算。
+3. 都没有时显示「录用通知：待定」。
+
+期刊没有统一的通知日期，需要的话自己填 `notification`。只改了 `stage` 没改 `role` 时，看板把 `role: target` 的目标当作已投出。
+
 规则：
 
 - 日期一律是北京时间（UTC+8）的 `YYYY-MM-DD`。

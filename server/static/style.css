@@ -54,6 +54,8 @@ a.card:hover { border-color: var(--accent); text-decoration: none; }
 .abstract p { margin: 0 0 10px; } .abstract p:last-child { margin-bottom: 0; }
 .pill { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 6px; white-space: nowrap; }
 .pill.stage { background: var(--accent-bg); color: var(--accent); }
+.pill.review { background: var(--accent-bg); color: var(--accent); }
+.c-accent { color: var(--accent); }
 .pill.firm { background: var(--bad-bg); color: var(--bad); font-weight: 600; }
 .pill.role { border: 1px solid var(--line); color: var(--muted); }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
