@@ -65,7 +65,7 @@ ccfddl 没有或日期有误的会议，写进 `server/deadlines.manual.yaml`（
 
 ## 接入一个项目仓库
 
-推荐让 AI agent 来做：本仓库带了一个 skill，[skills/connect-lab-dashboard/SKILL.md](skills/connect-lab-dashboard/SKILL.md)，写明了从建仓库、生成 `project.yaml`、校验、配置密钥到推送确认的完整流程。在 Claude Code 里安装一次即可在任何项目中使用：
+推荐让 AI agent 来做：本仓库带了一个 skill，[skills/connect-lab-dashboard/SKILL.md](skills/connect-lab-dashboard/SKILL.md)，写明了从建仓库、生成 `project.yaml`、校验到推送确认的完整流程。在 Claude Code 里安装一次即可在任何项目中使用：
 
 ```bash
 mkdir -p ~/.claude/skills/connect-lab-dashboard && curl -fsSL https://raw.githubusercontent.com/FranklinZty/zk-dashboard/main/skills/connect-lab-dashboard/SKILL.md -o ~/.claude/skills/connect-lab-dashboard/SKILL.md
@@ -75,19 +75,22 @@ mkdir -p ~/.claude/skills/connect-lab-dashboard && curl -fsSL https://raw.github
 
 手动接入的步骤：
 
-1. 把 `client/project.example.yaml` 复制为仓库根目录的 `project.yaml` 并填写。
-2. 把 `client/.github/workflows/lab-sync.yml` 复制到仓库的 `.github/workflows/`。
-3. 在仓库 Settings → Secrets and variables → Actions 里添加 `LAB_SYNC_URL` 和 `LAB_SYNC_SECRET`。
+1. 仓库要建在允许名单里的组织或用户下，目前是 `POLYU-ZK-GROUP` 和 `FranklinZty`。
+2. 把 `client/project.example.yaml` 复制为仓库根目录的 `project.yaml` 并填写。
+3. 把 `client/.github/workflows/lab-sync.yml` 复制到仓库的 `.github/workflows/`。
 4. push 一次，在 Actions 页查看 `lab-sync` 是否通过。
+
+不需要设置任何 Secret，也不需要服务器权限。
 
 ## 推送协议
 
-`POST /api/v1/ingest`，请求体为 JSON，请求头：
+`POST /api/v1/ingest`，请求体为 JSON，请求头 `Authorization: Bearer <GitHub Actions OIDC 令牌>`。
 
-- `X-Lab-Timestamp`: Unix 秒
-- `X-Lab-Signature`: `sha256=` + HMAC-SHA256(密钥, `"<timestamp>." + 请求体`)
+- 工作流用 `permissions: id-token: write` 向 GitHub 申请令牌，`audience` 为 `zk-dashboard:` + 请求体的 SHA-256，令牌因此只对这一次推送的内容有效。
+- 服务端用 GitHub 公开的公钥验证签名，要求令牌里的 `repository_owner` 在 `LAB_ALLOWED_OWNERS` 名单里，`repository` 和 `sha` 与请求体一致。所以每个仓库只能更新自己的项目。
+- 同一 `(project_id, sha)` 重复推送是幂等的。
 
-服务端拒绝时间戳偏差超过 300 秒的请求；同一 `(project_id, sha)` 重复推送是幂等的。
+服务端配置了 `LAB_SYNC_SECRET` 时，也接受旧的共享密钥 HMAC 签名（`X-Lab-Timestamp`、`X-Lab-Signature` 两个请求头），只用于本地开发；线上已停用。实现见 `client/lab_sync/signing.py` 和 `server/oidc.py`。
 
 ## 部署
 
@@ -105,7 +108,7 @@ deploy/push.sh
 |---|---|
 | `/opt/lab-dashboard` | 代码和 Python 3.11 虚拟环境 |
 | `/var/lib/lab-dashboard/lab.db` | 数据库 |
-| `/etc/lab-dashboard.env` | 签名密钥等配置，仅 root 可读 |
+| `/etc/lab-dashboard.env` | 访问密码、允许推送的组织名单等配置，仅 root 可读 |
 | `lab-dashboard.service` | systemd 服务，以普通用户 `lab` 运行，开机自启 |
 
 常用命令（在服务器上）：
@@ -132,10 +135,12 @@ ssh -t root@120.77.59.95 bash /opt/lab-dashboard/deploy/set-password.sh
 
 注意看板目前走 HTTP，密码在网络上不加密，只能挡住随手访问；上域名和 HTTPS 之后才算真正保密。
 
-查看签名密钥（填到各项目仓库的 `LAB_SYNC_SECRET`）：
+允许推送的组织或用户（逗号分隔）。新组织的仓库要接入，管理员在这里加上它：
 
 ```bash
-ssh root@120.77.59.95 "grep LAB_SYNC_SECRET /etc/lab-dashboard.env"
+ssh root@120.77.59.95 "grep LAB_ALLOWED_OWNERS /etc/lab-dashboard.env"
 ```
 
-各项目仓库的 `LAB_SYNC_URL` 填 `http://120.77.59.95/api/v1/ingest`。
+```bash
+ssh root@120.77.59.95 "sed -i 's/^LAB_ALLOWED_OWNERS=.*/LAB_ALLOWED_OWNERS=POLYU-ZK-GROUP,FranklinZty,新账号/' /etc/lab-dashboard.env && systemctl restart lab-dashboard"
+```
