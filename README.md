@@ -65,7 +65,7 @@ ccfddl 没有或日期有误的会议，写进 `server/deadlines.manual.yaml`（
 ## 接入一个项目仓库
 
 1. 把 `client/project.example.yaml` 复制为仓库根目录的 `project.yaml` 并填写。
-2. 把 `client/.github/workflows/lab-sync.yml` 复制到仓库的 `.github/workflows/`，改好其中的 `LAB_TOOLS_REPO`。
+2. 把 `client/.github/workflows/lab-sync.yml` 复制到仓库的 `.github/workflows/`。
 3. 在仓库 Settings → Secrets and variables → Actions 里添加 `LAB_SYNC_URL` 和 `LAB_SYNC_SECRET`。
 4. push 一次，在 Actions 页查看 `lab-sync` 是否通过。
 

@@ -4,7 +4,7 @@
 #   LAB_SYNC_URL     看板推送地址，如 http://<服务器IP>/api/v1/ingest
 #   LAB_SYNC_SECRET  全组共用的签名密钥
 #
-# 使用前把下面的 LAB_TOOLS_REPO 改成存放 zk-dashboard 的仓库（需为公开仓库）。
+# 同步脚本从下面的 LAB_TOOLS_REPO 拉取（公开仓库），一般不用改。
 name: lab-sync
 
 on:
@@ -22,7 +22,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  LAB_TOOLS_REPO: OWNER/zk-dashboard
+  LAB_TOOLS_REPO: FranklinZty/zk-dashboard
   LAB_TOOLS_REF: main
 
 jobs:
