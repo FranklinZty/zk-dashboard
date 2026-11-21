@@ -107,6 +107,20 @@ systemctl status lab-dashboard
 journalctl -u lab-dashboard -n 50
 ```
 
+看板有访问密码（首次部署时随机生成），浏览器会弹出登录框，用户名随意。查看当前密码：
+
+```bash
+ssh root@120.77.59.95 "grep LAB_VIEW_PASSWORD /etc/lab-dashboard.env"
+```
+
+修改密码：
+
+```bash
+ssh -t root@120.77.59.95 bash /opt/lab-dashboard/deploy/set-password.sh
+```
+
+注意看板目前走 HTTP，密码在网络上不加密，只能挡住随手访问；上域名和 HTTPS 之后才算真正保密。
+
 查看签名密钥（填到各项目仓库的 `LAB_SYNC_SECRET`）：
 
 ```bash

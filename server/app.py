@@ -3,12 +3,15 @@
 环境变量:
     LAB_SYNC_SECRET   必填，/ingest 的签名密钥
     LAB_DB_PATH       SQLite 路径，默认 ./lab.db
+    LAB_VIEW_PASSWORD 访问密码；设置后所有页面和只读接口都要求 HTTP Basic 认证（用户名任意）
     LAB_CCFDDL_SYNC   设为 0 关闭后台的 ccfddl 定时同步（测试用）
     LAB_MANUAL_FILE   手工截稿文件，默认 server/deadlines.manual.yaml
 """
 from __future__ import annotations
 
+import base64
 import datetime as dt
+import hmac
 import json
 import logging
 import os
@@ -21,7 +24,7 @@ from pathlib import Path
 
 import yaml
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 HERE = Path(__file__).resolve().parent
@@ -106,6 +109,29 @@ async def lifespan(app):
 
 
 app = FastAPI(title="lab dashboard", lifespan=lifespan, docs_url=None, redoc_url=None)
+
+
+# ---------- 访问密码 ----------
+
+OPEN_PATHS = {"/api/v1/ingest", "/robots.txt"}   # ingest 有自己的签名校验
+
+
+@app.middleware("http")
+async def view_auth(request: Request, call_next):
+    password = os.environ.get("LAB_VIEW_PASSWORD", "")
+    if not password or request.url.path in OPEN_PATHS:
+        return await call_next(request)
+    given = None
+    header = request.headers.get("authorization", "")
+    if header[:6].lower() == "basic ":
+        try:
+            given = base64.b64decode(header[6:]).decode("utf-8").partition(":")[2]
+        except ValueError:
+            given = None
+    if given is None or not hmac.compare_digest(given.encode(), password.encode()):
+        return Response("需要访问密码", status_code=401, media_type="text/plain; charset=utf-8",
+                        headers={"WWW-Authenticate": 'Basic realm="lab dashboard", charset="UTF-8"'})
+    return await call_next(request)
 
 
 # ---------- 写入：只有这一个入口 ----------

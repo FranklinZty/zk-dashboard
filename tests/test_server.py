@@ -200,6 +200,24 @@ class ServerTest(unittest.TestCase):
         self.assertIsNone(self.projects()["projects"][0]["next_target"])
         self.assertEqual(self.ids("?due=7"), [])
 
+    # ---- 访问密码 ----
+    def test_view_password_protects_pages_but_not_ingest(self):
+        os.environ["LAB_VIEW_PASSWORD"] = "letmein-123"
+        try:
+            for path in ("/", "/deadlines", "/p/x", "/api/v1/projects", "/api/v1/deadlines", "/static/app.js"):
+                r = self.c.get(path)
+                self.assertEqual(r.status_code, 401, path)
+                self.assertIn("Basic", r.headers["www-authenticate"])
+            self.assertEqual(self.c.get("/", auth=("lab", "wrong")).status_code, 401)
+            self.assertEqual(self.c.get("/", headers={"Authorization": "Basic !!!"}).status_code, 401)
+            self.assertEqual(self.c.get("/api/v1/projects", auth=("anyone", "letmein-123")).status_code, 200)
+            self.assertEqual(self.c.get("/robots.txt").status_code, 200)
+            # 推送靠签名，不需要访问密码
+            self.assertEqual(self.push("p1").status_code, 200)
+            self.assertEqual(self.push("p2", secret="wrong").status_code, 401)
+        finally:
+            del os.environ["LAB_VIEW_PASSWORD"]
+
     # ---- 详情与页面 ----
     def test_project_detail_and_pages(self):
         self.push("p1", summary="s", milestones=[{"title": "m", "status": "doing", "due": "2026-12-01"}],

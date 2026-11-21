@@ -8,8 +8,7 @@
 name: lab-sync
 
 on:
-  push:
-    branches: [main, master]
+  push:          # 任何分支上的提交都算项目活动；看板以提交时间最新的那次为准
   schedule:
     - cron: "17 19 * * *"   # 每天北京时间 03:17 全量重推，用于补齐服务器停机期间的缺口
   workflow_dispatch:

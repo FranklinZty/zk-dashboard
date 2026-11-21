@@ -22,6 +22,11 @@ if [ ! -f "$ENV_FILE" ]; then
     )
     echo "已生成 $ENV_FILE"
 fi
+# 访问密码：没有就随机生成一个，保证看板不会在无密码状态下对外。用 deploy/set-password.sh 修改。
+if ! grep -q '^LAB_VIEW_PASSWORD=' "$ENV_FILE"; then
+    echo "LAB_VIEW_PASSWORD=$(python3.11 -c 'import secrets; print(secrets.token_urlsafe(12))')" >> "$ENV_FILE"
+    echo "已生成访问密码"
+fi
 chmod 600 "$ENV_FILE"
 
 [ -x "$APP/.venv/bin/python" ] || python3.11 -m venv "$APP/.venv"
@@ -36,7 +41,7 @@ systemctl enable -q lab-dashboard
 systemctl restart lab-dashboard
 
 for _ in $(seq 1 20); do
-    if curl -fs -o /dev/null http://127.0.0.1/api/v1/projects; then
+    if curl -fs -o /dev/null http://127.0.0.1/robots.txt; then
         echo "部署完成，服务运行中"
         exit 0
     fi
