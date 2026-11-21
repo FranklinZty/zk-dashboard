@@ -213,6 +213,23 @@ def days_between(later, earlier):
     return (later - earlier).days   # 向下取整：不足 24 小时算 0 天
 
 
+_VENUE_ID_RE = re.compile(r"^(.*?)(\d{4}|\d{2})$")
+
+
+def guess_venue_name(venue_id, deadlines):
+    """数据源还没收录的届次，从同系列的往届推出名称: crypto27 + 'CRYPTO 2026' -> 'CRYPTO 2027'。"""
+    m = _VENUE_ID_RE.match(venue_id)
+    if not m:
+        return venue_id
+    series, year = m.groups()
+    sibling = re.compile(re.escape(series) + r"(\d{4}|\d{2})")
+    for did, d in deadlines.items():
+        if sibling.fullmatch(did):
+            base = re.sub(r"\s*\d{4}$", "", d["name"])
+            return f"{base} {year if len(year) == 4 else '20' + year}"
+    return venue_id
+
+
 def resolve_target(t, deadlines, now):
     """把一条 project_targets 记录变成页面要显示的形式。
 
@@ -226,7 +243,8 @@ def resolve_target(t, deadlines, now):
         when = parse_ts(t["planned"] + "T23:59:59")
     else:
         d = deadlines.get(t["ref"])
-        out.update(id=t["ref"], name=d["name"] if d else t["ref"], url=d["url"] if d else "")
+        out.update(id=t["ref"], name=d["name"] if d else guess_venue_name(t["ref"], deadlines),
+                   url=d["url"] if d else "")
         dated = [r for r in (d["rounds"] if d else []) if r["due"]]
         if not dated:
             out["status"] = "submitted" if t["role"] == "submitted" else "tbd"

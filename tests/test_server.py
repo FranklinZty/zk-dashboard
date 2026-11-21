@@ -137,6 +137,17 @@ class ServerTest(unittest.TestCase):
         self.assertEqual((got["p2"]["firm"], got["p2"]["due"], got["p2"]["status"]),
                          (False, "2027-03-15", "upcoming"))
 
+    def test_unlisted_edition_borrows_name_from_its_series(self):
+        self.sync(ccfddl_data("2026-12-01 23:59:59", cid="testconf27")
+                  + ccfddl_data("2026-12-01 23:59:59", cid="longid2027"))
+        self.push("p1", targets=[{"venue": "testconf28", "role": "target"}])
+        self.push("p2", targets=[{"venue": "longid2028", "role": "target"}])
+        self.push("p3", targets=[{"venue": "testconfx28", "role": "target"}])
+        got = {p["id"]: p["next_target"] for p in self.projects()["projects"]}
+        self.assertEqual((got["p1"]["name"], got["p1"]["status"]), ("TESTCONF 2028", "tbd"))
+        self.assertEqual(got["p2"]["name"], "TESTCONF 2028")
+        self.assertEqual(got["p3"]["name"], "testconfx28")     # 系列对不上就保留原样
+
     def test_manual_entry_overrides_ccfddl(self):
         self.push("p1", targets=[{"venue": "testconf27", "role": "target"}])
         manual = [{"id": "testconf27", "name": "手工", "rounds": [{"due": "2026-12-10 18:00"}]}]
