@@ -33,14 +33,17 @@ SYMBOLS = {
     "approx": "≈", "neq": "≠", "cdot": "·", "log": "log", "sqrt": "√", "infty": "∞",
     "ldots": "…", "dots": "…", "in": "∈", "pm": "±", "ll": "≪", "gg": "≫",
     "alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ", "epsilon": "ε", "varepsilon": "ε",
-    "lambda": "λ", "mu": "μ", "pi": "π", "sigma": "σ", "tau": "τ", "phi": "φ", "omega": "ω",
+    "lambda": "λ", "mu": "μ", "pi": "π", "sigma": "σ", "tau": "τ", "phi": "φ", "omega": "ω", "ell": "ℓ",
     "Theta": "Θ", "Omega": "Ω", "Sigma": "Σ", "Pi": "Π", "Delta": "Δ", "Lambda": "Λ",
 }
 DROP_WITH_ARGS = {   # 命令名 -> 要一并丢弃的 {} 参数个数
     "cite": 1, "citep": 1, "citet": 1, "ref": 1, "cref": 1, "Cref": 1, "eqref": 1, "label": 1,
     "footnote": 1, "keywords": 1, "evid": 1, "setlength": 2, "vspace": 1, "hspace": 1,
     "todo": 1, "index": 1,
+    "DIFdel": 1, "DIFdelFL": 1,   # latexdiff 标记的删除文本；\DIFadd{...} 保留内容
 }
+# latexdiff 把删除的片段（含公式）包在 \DIFdelbegin ... \DIFdelend 之间
+_DIFDEL_BLOCK_RE = re.compile(r"\\DIFdelbegin(?:FL)?\b.*?\\DIFdelend(?:FL)?\b", re.S)
 _DEF_RE = re.compile(
     r"\\(?:re|provide)?newcommand\*?\s*\{?\\([A-Za-z]+)\}?\s*(\[\d\])?\s*\{"
     r"|\\DeclareRobustCommand\*?\s*\{?\\([A-Za-z]+)\}?\s*(\[\d\])?\s*\{"
@@ -111,7 +114,7 @@ def find_macros(tex_sources):
 
 def to_plain(tex, macros=None):
     """LaTeX 片段 -> 纯文本。段落用空行分隔。"""
-    text = _strip_comments(tex)
+    text = _DIFDEL_BLOCK_RE.sub("", _strip_comments(tex))
     macros = macros or {}
     for _ in range(3):   # 自定义命令可能嵌套
         text, n = re.subn(r"\\([A-Za-z]+)(\{\})?",

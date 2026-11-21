@@ -144,6 +144,11 @@ class AbstractTest(unittest.TestCase):
         self.assertEqual(out, "We present Vicuna, a fast scheme with n ≥ 2^20 rows and 3–5× speed-up."
                               "\n\nSecond paragraph, 50% smaller.")
 
+    def test_latexdiff_markup_keeps_only_the_new_text(self):
+        tex = (r"\DIFdel{Old opening.} \DIFadd{New opening.} Cost $\Theta(\ell)$ per step for "
+               r"\DIFaddbegin \DIFadd{non-uniform}\DIFaddend \DIFdelbegin \DIFdel{machine} $x$\DIFdelend steps.")
+        self.assertEqual(abstract.to_plain(tex), "New opening. Cost Θ(ℓ) per step for non-uniform steps.")
+
     def test_extract_reads_environment_and_expands_project_macros(self):
         root = self.repo({
             "paper/main.tex": r"\newcommand{\sys}{\textsf{Vicuna}\xspace}" "\n\\input{sections/abstract}",
