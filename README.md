@@ -17,6 +17,7 @@
 | `tools/seed_demo.py` | 往本地开发服务器灌示例项目 |
 | `tools/dev_receiver.py` | 只验证推送链路用的极简接收端 |
 | `tests/` | 客户端与服务端测试 |
+| `skills/connect-lab-dashboard/` | 给 AI agent 用的接入流程（SKILL.md） |
 
 ## 本地开发
 
@@ -63,6 +64,16 @@ ccfddl 没有或日期有误的会议，写进 `server/deadlines.manual.yaml`（
 ```
 
 ## 接入一个项目仓库
+
+推荐让 AI agent 来做：本仓库带了一个 skill，[skills/connect-lab-dashboard/SKILL.md](skills/connect-lab-dashboard/SKILL.md)，写明了从建仓库、生成 `project.yaml`、校验、配置密钥到推送确认的完整流程。在 Claude Code 里安装一次即可在任何项目中使用：
+
+```bash
+mkdir -p ~/.claude/skills/connect-lab-dashboard && curl -fsSL https://raw.githubusercontent.com/FranklinZty/zk-dashboard/main/skills/connect-lab-dashboard/SKILL.md -o ~/.claude/skills/connect-lab-dashboard/SKILL.md
+```
+
+之后在项目目录里对 agent 说「把这个项目接入看板」。其他 agent 可以直接读这个文件照做。
+
+手动接入的步骤：
 
 1. 把 `client/project.example.yaml` 复制为仓库根目录的 `project.yaml` 并填写。
 2. 把 `client/.github/workflows/lab-sync.yml` 复制到仓库的 `.github/workflows/`。
