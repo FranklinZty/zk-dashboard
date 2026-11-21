@@ -59,7 +59,7 @@ def main():
             "source": "manual", "last_commit_at": at, "project": {"schema": 1, **project},
             "commits": [{"sha": sha, "author": project["owner"], "date": at, "message": "示例提交"}],
         }, ensure_ascii=False).encode()
-        status, text = push.post(base + "/api/v1/ingest", secret, body)
+        status, text = push.post(base + "/api/v1/ingest", body, push.auth_headers(body, secret)[1])
         print(pid, status, text)
 
 

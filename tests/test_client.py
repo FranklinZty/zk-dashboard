@@ -208,6 +208,58 @@ class AbstractTest(unittest.TestCase):
         self.assertEqual((out["abstract_file"], v.validate(out)), ("a.tex", []))
 
 
+class PushAuthTest(unittest.TestCase):
+    def setUp(self):
+        import push
+        self.push = push
+        self.saved = {k: os.environ.pop(k, None)
+                      for k in ("ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN")}
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+
+    def test_uses_github_token_inside_actions(self):
+        import threading
+        import urllib.parse
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        seen = {}
+
+        class FakeGitHub(BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen["query"] = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                seen["auth"] = self.headers["Authorization"]
+                data = b'{"value": "the-oidc-token"}'
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *a):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), FakeGitHub)
+        threading.Thread(target=server.handle_request, daemon=True).start()
+        os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"] = f"http://127.0.0.1:{server.server_port}/token?api-version=2.0"
+        os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"] = "runner-token"
+        method, headers = self.push.auth_headers(b'{"x":1}', secret="ignored")
+        server.server_close()
+        self.assertEqual(headers, {"Authorization": "Bearer the-oidc-token"})
+        self.assertEqual(method, "GitHub 身份认证")
+        self.assertEqual(seen["auth"], "Bearer runner-token")
+        self.assertEqual(seen["query"]["api-version"], ["2.0"])
+        self.assertEqual(seen["query"]["audience"], [signing.oidc_audience(b'{"x":1}')])
+
+    def test_falls_back_to_shared_secret_outside_actions(self):
+        method, headers = self.push.auth_headers(b"{}", secret="s3cret")
+        self.assertEqual(method, "共享密钥签名")
+        self.assertTrue(signing.verify("s3cret", headers[signing.HEADER_TS], b"{}", headers[signing.HEADER_SIG]))
+        with self.assertRaises(RuntimeError):
+            self.push.auth_headers(b"{}", secret="")
+
+
 class SigningTest(unittest.TestCase):
     def test_roundtrip(self):
         sig = signing.sign("s3cret", "1000", b"{}")

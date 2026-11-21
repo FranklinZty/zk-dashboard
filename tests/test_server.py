@@ -14,13 +14,20 @@ sys.path.insert(0, os.path.join(ROOT, "client", "lab_sync"))
 
 _tmp = tempfile.mkdtemp()
 os.environ.update(LAB_DB_PATH=os.path.join(_tmp, "test.db"), LAB_SYNC_SECRET="test-secret",
+                  LAB_ALLOWED_OWNERS="lab, POLYU-ZK-GROUP",
                   LAB_CCFDDL_SYNC="0", LAB_MANUAL_FILE=os.path.join(_tmp, "none.yaml"))
 
+import jwt  # noqa: E402
+from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import signing  # noqa: E402
 from server import app as srv  # noqa: E402
 from server import ccfddl  # noqa: E402
+from server import oidc  # noqa: E402
+
+_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+_OTHER_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
 CST = dt.timezone(dt.timedelta(hours=8))
 NOW = dt.datetime(2026, 11, 21, 12, 0, tzinfo=CST)
@@ -38,12 +45,38 @@ class ServerTest(unittest.TestCase):
             os.remove(os.environ["LAB_DB_PATH"])
         self._real_now = srv.now_cst
         srv.now_cst = lambda: NOW
+        self._real_key = oidc._signing_key
+        oidc._signing_key = lambda token: _KEY.public_key()
         self.ctx = TestClient(srv.app)
         self.c = self.ctx.__enter__()
 
     def tearDown(self):
         self.ctx.__exit__(None, None, None)
         srv.now_cst = self._real_now
+        oidc._signing_key = self._real_key
+
+    def body(self, pid, days_ago=1, sha=None, repo=None, **project):
+        commit_at = (NOW - dt.timedelta(days=days_ago)).isoformat(timespec="seconds")
+        sha = sha or (pid.encode().hex() + "0" * 40)[:40]
+        return json.dumps({
+            "payload_version": 1, "project_id": pid, "repo": repo or f"lab/{pid}", "sha": sha,
+            "source": "push", "last_commit_at": commit_at,
+            "project": {"schema": 1, "title": pid.upper(), "owner": "alice", "stage": "implementation",
+                        **project},
+            "commits": [{"sha": sha, "author": "a", "date": commit_at, "message": "m"}],
+        }).encode()
+
+    def token(self, body, key=_KEY, **overrides):
+        p = json.loads(body)
+        claims = {"iss": oidc.ISSUER, "aud": oidc.signing.oidc_audience(body),
+                  "iat": int(time.time()) - 5, "exp": int(time.time()) + 300,
+                  "repository": p["repo"], "repository_owner": p["repo"].split("/")[0], "sha": p["sha"]}
+        claims.update(overrides)
+        claims = {k: v for k, v in claims.items() if v is not None}
+        return jwt.encode(claims, key, algorithm="RS256", headers={"kid": "k1"})
+
+    def oidc_push(self, body, token):
+        return self.c.post("/api/v1/ingest", content=body, headers={"Authorization": "Bearer " + token})
 
     def push(self, pid, days_ago=1, sha=None, secret="test-secret", ts=None, abstract=None,
              abstract_source="paper/sections/abstract.tex", **project):
@@ -248,6 +281,61 @@ class ServerTest(unittest.TestCase):
         srv.init_db()
         self.assertEqual(self.push("p1", abstract="x" * 100).status_code, 200)
         self.assertEqual(self.c.get("/api/v1/projects/p1").json()["project"]["description"]["text"], "x" * 100)
+
+    # ---- GitHub 身份令牌 ----
+    def test_oidc_push_is_accepted(self):
+        body = self.body("p1")
+        r = self.oidc_push(body, self.token(body))
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.ids(), ["p1"])
+        # 组织名不区分大小写
+        body = self.body("p2", repo="polyu-zk-group/P2")
+        self.assertEqual(self.oidc_push(body, self.token(body)).status_code, 200)
+
+    def test_oidc_rejects_bad_tokens(self):
+        body = self.body("p1")
+        cases = {
+            "其他组织": self.token(self.body("p1", repo="evil/p1"), repository="evil/p1",
+                               repository_owner="evil"),
+            "伪造签名": self.token(body, key=_OTHER_KEY),
+            "已过期": self.token(body, iat=int(time.time()) - 900, exp=int(time.time()) - 300),
+            "签发方不对": self.token(body, iss="https://example.com"),
+            "缺少 sha": self.token(body, sha=None),
+            "不是 JWT": "not-a-jwt",
+        }
+        for name, tok in cases.items():
+            b = self.body("p1", repo="evil/p1") if name == "其他组织" else body
+            self.assertEqual(self.oidc_push(b, tok).status_code, 401, name)
+        self.assertEqual(self.ids(), [])
+
+    def test_oidc_token_is_bound_to_body_repo_and_sha(self):
+        body = self.body("p1")
+        tok = self.token(body)
+        tampered = self.body("p1", stage="accepted")              # 中途被改的请求体
+        self.assertEqual(self.oidc_push(tampered, tok).status_code, 401)
+        other = self.body("p2")                                   # 用 p1 的身份推 p2
+        self.assertEqual(self.oidc_push(other, self.token(other, repository="lab/p1")).status_code, 403)
+        moved = self.body("p1", sha="b" * 40)                     # 提交对不上
+        self.assertEqual(self.oidc_push(moved, self.token(moved, sha="a" * 40)).status_code, 403)
+        self.assertEqual(self.ids(), [])
+
+    def test_oidc_key_fetch_failure_is_retryable(self):
+        def down(token):
+            raise jwt.PyJWKClientConnectionError("timed out")
+        oidc._signing_key = down
+        body = self.body("p1")
+        self.assertEqual(self.oidc_push(body, self.token(body)).status_code, 503)
+
+    def test_shared_secret_can_be_disabled(self):
+        saved = os.environ.pop("LAB_SYNC_SECRET")
+        try:
+            r = self.push("p1")
+            self.assertEqual(r.status_code, 401)
+            self.assertIn("身份令牌", r.json()["detail"])
+            body = self.body("p1")
+            self.assertEqual(self.oidc_push(body, self.token(body)).status_code, 200)
+        finally:
+            os.environ["LAB_SYNC_SECRET"] = saved
 
     # ---- 访问密码 ----
     def test_view_password_protects_pages_but_not_ingest(self):

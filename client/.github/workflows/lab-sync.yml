@@ -1,8 +1,7 @@
 # 复制到项目仓库的 .github/workflows/lab-sync.yml
 #
-# 仓库需要配置两个 Secret（Settings → Secrets and variables → Actions）:
-#   LAB_SYNC_URL     看板推送地址，如 http://<服务器IP>/api/v1/ingest
-#   LAB_SYNC_SECRET  全组共用的签名密钥
+# 不需要配置任何 Secret：推送用 GitHub 签发的身份令牌认证（下面的 id-token: write），
+# 看板只接受允许名单里的组织或用户的仓库，每个仓库只能更新自己的项目。
 #
 # 同步脚本从下面的 LAB_TOOLS_REPO 拉取（公开仓库），一般不用改。
 name: lab-sync
@@ -15,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write   # 申请 GitHub 身份令牌，用于向看板证明「这次推送来自本仓库」
 
 concurrency:
   group: lab-sync
@@ -23,6 +23,7 @@ concurrency:
 env:
   LAB_TOOLS_REPO: FranklinZty/zk-dashboard
   LAB_TOOLS_REF: main
+  LAB_SYNC_URL: http://120.77.59.95/api/v1/ingest
 
 jobs:
   sync:
@@ -54,7 +55,4 @@ jobs:
         run: python .lab-tools/client/lab_sync/collect.py project.yaml -o "$RUNNER_TEMP/payload.json"
 
       - name: 推送到看板
-        env:
-          LAB_SYNC_URL: ${{ secrets.LAB_SYNC_URL }}
-          LAB_SYNC_SECRET: ${{ secrets.LAB_SYNC_SECRET }}
         run: python .lab-tools/client/lab_sync/push.py "$RUNNER_TEMP/payload.json"

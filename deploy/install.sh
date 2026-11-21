@@ -2,7 +2,7 @@
 # 在服务器上以 root 运行，可重复执行。由 deploy/push.sh 调用，一般不用手动跑。
 #   代码      /opt/lab-dashboard
 #   数据库    /var/lib/lab-dashboard/lab.db
-#   配置      /etc/lab-dashboard.env（含签名密钥，仅 root 可读）
+#   配置      /etc/lab-dashboard.env（访问密码、允许推送的组织等，仅 root 可读）
 set -euo pipefail
 
 APP=/opt/lab-dashboard
@@ -15,12 +15,16 @@ id lab >/dev/null 2>&1 || useradd --system --home-dir "$DATA" --shell /sbin/nolo
 install -d -o lab -g lab -m 750 "$DATA"
 
 if [ ! -f "$ENV_FILE" ]; then
-    (   # 子 shell：收紧的 umask 只作用于密钥文件，不影响后面创建的程序文件
+    (   # 子 shell：收紧的 umask 只作用于配置文件，不影响后面创建的程序文件
         umask 077
-        echo "LAB_SYNC_SECRET=$(python3.11 -c 'import secrets; print(secrets.token_hex(32))')" > "$ENV_FILE"
-        echo "LAB_DB_PATH=$DATA/lab.db" >> "$ENV_FILE"
+        echo "LAB_DB_PATH=$DATA/lab.db" > "$ENV_FILE"
     )
     echo "已生成 $ENV_FILE"
+fi
+# 允许推送的 GitHub 组织或用户。修改后 systemctl restart lab-dashboard
+if ! grep -q '^LAB_ALLOWED_OWNERS=' "$ENV_FILE"; then
+    echo "LAB_ALLOWED_OWNERS=POLYU-ZK-GROUP,FranklinZty" >> "$ENV_FILE"
+    echo "已设置允许推送的组织: POLYU-ZK-GROUP,FranklinZty"
 fi
 # 访问密码：没有就随机生成一个，保证看板不会在无密码状态下对外。用 deploy/set-password.sh 修改。
 if ! grep -q '^LAB_VIEW_PASSWORD=' "$ENV_FILE"; then

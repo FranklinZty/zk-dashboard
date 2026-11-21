@@ -1,7 +1,8 @@
 """课题组看板服务端。启动: uvicorn server.app:app
 
 环境变量:
-    LAB_SYNC_SECRET   必填，/ingest 的签名密钥
+    LAB_ALLOWED_OWNERS 允许推送的 GitHub 组织或用户，逗号分隔；推送用 GitHub 身份令牌认证
+    LAB_SYNC_SECRET   可选，共享签名密钥；设置后也接受 HMAC 签名的推送（本地开发用）
     LAB_DB_PATH       SQLite 路径，默认 ./lab.db
     LAB_VIEW_PASSWORD 访问密码；设置后所有页面和只读接口都要求 HTTP Basic 认证（用户名任意）
     LAB_CCFDDL_SYNC   设为 0 关闭后台的 ccfddl 定时同步（测试用）
@@ -24,6 +25,7 @@ from pathlib import Path
 
 import yaml
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -33,6 +35,7 @@ import signing  # noqa: E402
 import validate as pv  # noqa: E402
 
 from . import ccfddl  # noqa: E402
+from . import oidc  # noqa: E402
 
 log = logging.getLogger("lab")
 CST = dt.timezone(dt.timedelta(hours=8))
@@ -142,17 +145,38 @@ async def view_auth(request: Request, call_next):
 
 # ---------- 写入：只有这一个入口 ----------
 
-@app.post("/api/v1/ingest")
-async def ingest(request: Request):
+def allowed_owners():
+    return [o for o in os.environ.get("LAB_ALLOWED_OWNERS", "").replace(" ", "").split(",") if o]
+
+
+async def authenticate(request, body):
+    """返回 GitHub 身份令牌里的声明；用共享密钥认证时返回 None。认证失败抛 HTTPException。"""
+    auth = request.headers.get("authorization", "")
+    if auth[:7].lower() == "bearer ":
+        owners = allowed_owners()
+        if not owners:
+            raise HTTPException(503, "服务端未配置 LAB_ALLOWED_OWNERS")
+        try:
+            return await run_in_threadpool(oidc.verify, auth[7:].strip(), body, owners)
+        except oidc.Unavailable as e:
+            raise HTTPException(503, str(e))
+        except oidc.OIDCError as e:
+            raise HTTPException(401, str(e))
     secret = os.environ.get("LAB_SYNC_SECRET", "")
     if not secret:
-        raise HTTPException(503, "服务端未配置 LAB_SYNC_SECRET")
-    body = await request.body()
-    if not 0 < len(body) <= MAX_BODY:
-        raise HTTPException(413, "请求体大小不合法")
+        raise HTTPException(401, "需要 GitHub 身份令牌（请使用最新的 lab-sync 工作流）")
     if not signing.verify(secret, request.headers.get(signing.HEADER_TS), body,
                           request.headers.get(signing.HEADER_SIG)):
         raise HTTPException(401, "签名或时间戳无效")
+    return None
+
+
+@app.post("/api/v1/ingest")
+async def ingest(request: Request):
+    body = await request.body()
+    if not 0 < len(body) <= MAX_BODY:
+        raise HTTPException(413, "请求体大小不合法")
+    claims = await authenticate(request, body)
 
     try:
         p = json.loads(body)
@@ -168,6 +192,12 @@ async def ingest(request: Request):
             and isinstance(repo, str) and isinstance(commits, list)
             and isinstance(abstract, str) and isinstance(abstract_source, str)):
         raise HTTPException(400, "payload 字段不合法")
+    if claims is not None:   # 仓库只能更新自己的项目，提交也必须是这次运行的提交
+        if (repo.lower() != str(claims["repository"]).lower()
+                or pid != repo.split("/")[-1].lower()):
+            raise HTTPException(403, f"身份令牌属于 {claims['repository']}，不能推送 {repo}")
+        if sha != claims["sha"]:
+            raise HTTPException(403, "身份令牌对应的提交与 payload 不一致")
     errors = pv.validate(project)
     if errors:
         raise HTTPException(400, "project 校验失败: " + "; ".join(errors[:5]))
