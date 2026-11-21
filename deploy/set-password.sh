@@ -13,4 +13,4 @@ sed -i '/^LAB_VIEW_PASSWORD=/d' "$ENV_FILE"
 echo "LAB_VIEW_PASSWORD=$pw" >> "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 systemctl restart lab-dashboard
-echo "已更新。访问看板时用户名随意，密码填刚才设置的值。"
+echo "已更新。所有人需要用新密码重新登录。"

@@ -4,7 +4,8 @@
     LAB_ALLOWED_OWNERS 允许推送的 GitHub 组织或用户，逗号分隔；推送用 GitHub 身份令牌认证
     LAB_SYNC_SECRET   可选，共享签名密钥；设置后也接受 HMAC 签名的推送（本地开发用）
     LAB_DB_PATH       SQLite 路径，默认 ./lab.db
-    LAB_VIEW_PASSWORD 访问密码；设置后所有页面和只读接口都要求 HTTP Basic 认证（用户名任意）
+    LAB_VIEW_PASSWORD 访问密码；设置后要先在 /login 输入密码，浏览器记住 30 天。
+                      脚本也可以直接用 HTTP Basic 认证（用户名任意）
     LAB_CCFDDL_SYNC   设为 0 关闭后台的 ccfddl 定时同步（测试用）
     LAB_MANUAL_FILE   手工截稿文件，默认 server/deadlines.manual.yaml
 """
@@ -12,7 +13,9 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+import hashlib
 import hmac
+import html
 import json
 import logging
 import os
@@ -20,13 +23,16 @@ import re
 import sqlite3
 import sys
 import threading
+import time
+import urllib.parse
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager, closing
 from pathlib import Path
 
 import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 HERE = Path(__file__).resolve().parent
@@ -123,26 +129,137 @@ app = FastAPI(title="lab dashboard", lifespan=lifespan, docs_url=None, redoc_url
 
 
 # ---------- 访问密码 ----------
+#
+# 浏览器：在 /login 输入一次密码，得到一个 30 天有效的 cookie。cookie 里只有到期时间和签名，
+# 签名的密钥由访问密码派生，所以改了密码，所有人的登录立即失效。
+# 脚本：仍可直接用 HTTP Basic 认证（curl -u lab:密码）。
 
-OPEN_PATHS = {"/api/v1/ingest", "/robots.txt"}   # ingest 有自己的签名校验
+OPEN_PATHS = {"/api/v1/ingest", "/robots.txt", "/login", "/logout", "/static/style.css"}
+SESSION_COOKIE = "lab_session"
+SESSION_DAYS = 30
+LOGIN_LIMIT, LOGIN_WINDOW = 10, 600      # 同一 IP 10 分钟内最多输错 10 次
+_failures = defaultdict(deque)
+
+
+def _session_key(password):
+    return hashlib.sha256(b"lab-session:" + password.encode()).digest()
+
+
+def make_session(password, now=None):
+    expires = str(int((now or time.time()) + SESSION_DAYS * 86400))
+    sig = hmac.new(_session_key(password), expires.encode(), hashlib.sha256).hexdigest()
+    return f"{expires}.{sig}"
+
+
+def session_valid(value, password, now=None):
+    expires, _, sig = (value or "").partition(".")
+    if not expires.isdigit() or int(expires) < (now or time.time()):
+        return False
+    good = hmac.new(_session_key(password), expires.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(sig, good)
+
+
+def basic_password(request):
+    header = request.headers.get("authorization", "")
+    if header[:6].lower() != "basic ":
+        return None
+    try:
+        return base64.b64decode(header[6:]).decode("utf-8").partition(":")[2]
+    except ValueError:
+        return None
+
+
+def safe_next(target):
+    """登录后跳回的地址，只允许站内路径，防止被利用跳到外部网站。"""
+    target = target or "/"
+    if not target.startswith("/") or target.startswith("//") or "\\" in target:
+        return "/"
+    return target
 
 
 @app.middleware("http")
 async def view_auth(request: Request, call_next):
     password = os.environ.get("LAB_VIEW_PASSWORD", "")
-    if not password or request.url.path in OPEN_PATHS:
+    path = request.url.path
+    if not password or path in OPEN_PATHS:
         return await call_next(request)
-    given = None
-    header = request.headers.get("authorization", "")
-    if header[:6].lower() == "basic ":
-        try:
-            given = base64.b64decode(header[6:]).decode("utf-8").partition(":")[2]
-        except ValueError:
-            given = None
-    if given is None or not hmac.compare_digest(given.encode(), password.encode()):
-        return Response("需要访问密码", status_code=401, media_type="text/plain; charset=utf-8",
-                        headers={"WWW-Authenticate": 'Basic realm="lab dashboard", charset="UTF-8"'})
-    return await call_next(request)
+    given = basic_password(request)
+    if (session_valid(request.cookies.get(SESSION_COOKIE), password)
+            or (given is not None and hmac.compare_digest(given.encode(), password.encode()))):
+        return await call_next(request)
+    if path.startswith("/api/"):
+        return Response('{"detail":"需要登录"}', status_code=401, media_type="application/json")
+    target = path + (f"?{request.url.query}" if request.url.query else "")
+    return RedirectResponse("/login?" + urllib.parse.urlencode({"next": target}), status_code=303)
+
+
+LOGIN_PAGE = """<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>登录 · 课题组看板</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  .login {{ max-width: 340px; margin: 12vh auto 0; }}
+  .login h1 {{ margin-bottom: 16px; }}
+  .login input {{ width: 100%; font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 6px 0 12px; }}
+  .login button {{ width: 100%; color: var(--card); background: var(--accent); border: 0; padding: 8px; }}
+  .login button:hover {{ color: var(--card); opacity: .9; }}
+  .err {{ color: var(--bad); font-size: 13px; margin: 0 0 10px; }}
+</style></head>
+<body><main><form class="card login" method="post" action="/login">
+  <h1>课题组看板</h1>
+  {error}
+  <label for="pw" class="muted small">访问密码</label>
+  <input id="pw" name="password" type="password" autocomplete="current-password" required autofocus>
+  <input type="hidden" name="next" value="{next}">
+  <button type="submit">登录</button>
+  <p class="muted small" style="margin:12px 0 0">登录后这台设备 30 天内不用再输密码。</p>
+</form></main></body></html>"""
+
+
+def login_page(next_path, error="", status=200):
+    err = f'<p class="err">{html.escape(error)}</p>' if error else ""
+    return HTMLResponse(LOGIN_PAGE.format(error=err, next=html.escape(safe_next(next_path))),
+                        status_code=status, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/login")
+def login_form(next: str = "/"):
+    return login_page(next)
+
+
+@app.post("/login")
+async def login_submit(request: Request):
+    password = os.environ.get("LAB_VIEW_PASSWORD", "")
+    form = urllib.parse.parse_qs((await request.body()).decode("utf-8", "replace"))
+    given, next_path = form.get("password", [""])[0], form.get("next", ["/"])[0]
+    if not password:
+        return RedirectResponse(safe_next(next_path), status_code=303)
+
+    ip = request.client.host if request.client else "?"
+    recent = _failures[ip]
+    while recent and recent[0] < time.time() - LOGIN_WINDOW:
+        recent.popleft()
+    if len(recent) >= LOGIN_LIMIT:
+        return login_page(next_path, "输错次数太多，请 10 分钟后再试。", 429)
+    if not hmac.compare_digest(given.encode(), password.encode()):
+        recent.append(time.time())
+        return login_page(next_path, "密码不对，请重试。", 401)
+
+    recent.clear()
+    resp = RedirectResponse(safe_next(next_path), status_code=303)
+    resp.set_cookie(SESSION_COOKIE, make_session(password), max_age=SESSION_DAYS * 86400,
+                    httponly=True, samesite="lax", path="/")
+    return resp
+
+
+@app.get("/logout")
+def logout():
+    resp = RedirectResponse("/login", status_code=303)
+    resp.delete_cookie(SESSION_COOKIE, path="/")
+    return resp
 
 
 # ---------- 写入：只有这一个入口 ----------

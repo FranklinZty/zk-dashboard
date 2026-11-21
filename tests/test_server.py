@@ -408,18 +408,84 @@ class ServerTest(unittest.TestCase):
     def test_view_password_protects_pages_but_not_ingest(self):
         os.environ["LAB_VIEW_PASSWORD"] = "letmein-123"
         try:
-            for path in ("/", "/deadlines", "/p/x", "/api/v1/projects", "/api/v1/deadlines", "/static/app.js"):
+            for path in ("/", "/deadlines", "/p/x", "/static/app.js"):
+                r = self.c.get(path, follow_redirects=False)
+                self.assertEqual(r.status_code, 303, path)
+                self.assertTrue(r.headers["location"].startswith("/login?next="), path)
+                self.assertNotIn("www-authenticate", r.headers)       # 不再弹浏览器登录框
+            for path in ("/api/v1/projects", "/api/v1/deadlines"):
                 r = self.c.get(path)
                 self.assertEqual(r.status_code, 401, path)
-                self.assertIn("Basic", r.headers["www-authenticate"])
-            self.assertEqual(self.c.get("/", auth=("lab", "wrong")).status_code, 401)
-            self.assertEqual(self.c.get("/", headers={"Authorization": "Basic !!!"}).status_code, 401)
+                self.assertNotIn("www-authenticate", r.headers)
+            self.assertEqual(self.c.get("/", auth=("lab", "wrong"), follow_redirects=False).status_code, 303)
+            self.assertEqual(self.c.get("/", headers={"Authorization": "Basic !!!"},
+                                        follow_redirects=False).status_code, 303)
+            # 脚本仍可直接用 Basic 认证
             self.assertEqual(self.c.get("/api/v1/projects", auth=("anyone", "letmein-123")).status_code, 200)
-            self.assertEqual(self.c.get("/robots.txt").status_code, 200)
+            for path in ("/robots.txt", "/login", "/static/style.css"):
+                self.assertEqual(self.c.get(path).status_code, 200, path)
             # 推送靠签名，不需要访问密码
             self.assertEqual(self.push("p1").status_code, 200)
             self.assertEqual(self.push("p2", secret="wrong").status_code, 401)
         finally:
+            del os.environ["LAB_VIEW_PASSWORD"]
+
+    def login(self, password, next_path="/p/x?a=1"):
+        return self.c.post("/login", data={"password": password, "next": next_path}, follow_redirects=False)
+
+    def test_login_sets_a_30_day_cookie(self):
+        os.environ["LAB_VIEW_PASSWORD"] = "letmein-123"
+        try:
+            self.assertIn("/p/x?a=1", self.c.get("/login?next=/p/x?a=1").text)
+            bad = self.login("wrong")
+            self.assertEqual(bad.status_code, 401)
+            self.assertIn("密码不对", bad.text)
+            self.assertNotIn(srv.SESSION_COOKIE, self.c.cookies)
+
+            ok = self.login("letmein-123")
+            self.assertEqual((ok.status_code, ok.headers["location"]), (303, "/p/x?a=1"))
+            cookie = ok.headers["set-cookie"]
+            self.assertIn("Max-Age=2592000", cookie)
+            self.assertIn("HttpOnly", cookie)
+            self.assertEqual(self.c.get("/api/v1/projects").status_code, 200)
+            self.assertEqual(self.c.get("/", follow_redirects=False).status_code, 200)
+
+            # 退出后失效
+            self.c.get("/logout", follow_redirects=False)
+            self.c.cookies.clear()
+            self.assertEqual(self.c.get("/api/v1/projects").status_code, 401)
+        finally:
+            del os.environ["LAB_VIEW_PASSWORD"]
+
+    def test_session_cookie_cannot_be_forged_and_dies_with_password_change(self):
+        token = srv.make_session("pw-one-123")
+        self.assertTrue(srv.session_valid(token, "pw-one-123"))
+        self.assertFalse(srv.session_valid(token, "pw-two-456"))              # 改密码后失效
+        expires, _, sig = token.partition(".")
+        self.assertFalse(srv.session_valid(f"{int(expires) + 999}.{sig}", "pw-one-123"))   # 改到期时间
+        self.assertFalse(srv.session_valid(token, "pw-one-123", now=int(expires) + 1))      # 过期
+        for junk in ("", None, "abc", "1.2.3", f"{expires}."):
+            self.assertFalse(srv.session_valid(junk, "pw-one-123"), junk)
+
+    def test_login_redirect_stays_on_site(self):
+        for bad in ("https://evil.example", "//evil.example", "/\\evil.example", "javascript:alert(1)", ""):
+            self.assertEqual(srv.safe_next(bad), "/", bad)
+        self.assertEqual(srv.safe_next("/deadlines?x=1"), "/deadlines?x=1")
+        os.environ["LAB_VIEW_PASSWORD"] = "letmein-123"
+        try:
+            self.assertEqual(self.login("letmein-123", "https://evil.example").headers["location"], "/")
+        finally:
+            del os.environ["LAB_VIEW_PASSWORD"]
+
+    def test_login_is_rate_limited(self):
+        os.environ["LAB_VIEW_PASSWORD"] = "letmein-123"
+        srv._failures.clear()
+        try:
+            for _ in range(srv.LOGIN_LIMIT):
+                self.assertEqual(self.login("wrong").status_code, 401)
+            self.assertEqual(self.login("letmein-123").status_code, 429)   # 锁定期间正确密码也不行
+        finally:
+            srv._failures.clear()
             del os.environ["LAB_VIEW_PASSWORD"]
 
     # ---- 详情与页面 ----

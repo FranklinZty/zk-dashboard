@@ -121,7 +121,7 @@ systemctl status lab-dashboard
 journalctl -u lab-dashboard -n 50
 ```
 
-看板有访问密码（首次部署时随机生成），浏览器会弹出登录框，用户名随意。查看当前密码：
+看板有访问密码（首次部署时随机生成）。打开看板会先进登录页，输一次密码后这台设备 30 天内不用再输；页面右上角可以退出。修改密码后所有人都要重新登录。脚本访问只读接口时可以直接用 `curl -u lab:密码`。查看当前密码：
 
 ```bash
 ssh root@120.77.59.95 "grep LAB_VIEW_PASSWORD /etc/lab-dashboard.env"

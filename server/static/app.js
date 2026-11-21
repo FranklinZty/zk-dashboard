@@ -15,6 +15,10 @@ const safeUrl = u => (/^https?:\/\//i.test(u || '') ? esc(u) : '');
 
 async function api(path) {
   const r = await fetch('/api/v1' + path);
+  if (r.status === 401) {   // 登录过期：回登录页，登录后回到当前页面
+    location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
+    throw new Error('需要登录');
+  }
   if (!r.ok) throw new Error(r.status === 404 ? '没有找到' : `请求失败 (${r.status})`);
   return r.json();
 }
