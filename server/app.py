@@ -66,8 +66,9 @@ def init_db():
         con.executescript((HERE / "schema.sql").read_text(encoding="utf-8"))
         # 旧库升级：CREATE TABLE IF NOT EXISTS 不会给已有的表加列
         columns = {r["name"] for r in con.execute("PRAGMA table_info(projects)")}
-        if "abstract" not in columns:
-            con.execute("ALTER TABLE projects ADD COLUMN abstract TEXT NOT NULL DEFAULT ''")
+        for column in ("abstract", "abstract_source"):
+            if column not in columns:
+                con.execute(f"ALTER TABLE projects ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
         con.commit()
 
 
@@ -159,12 +160,13 @@ async def ingest(request: Request):
         project, commits = p["project"], p["commits"]
         last_commit_at = parse_ts(p["last_commit_at"]).isoformat(timespec="seconds")
         abstract = p.get("abstract") or ""
+        abstract_source = p.get("abstract_source") or ""
     except (ValueError, KeyError, TypeError, AttributeError):
         raise HTTPException(400, "payload 结构不正确")
     if not (isinstance(pid, str) and PROJECT_ID_RE.match(pid)
             and isinstance(sha, str) and SHA_RE.match(sha)
             and isinstance(repo, str) and isinstance(commits, list)
-            and isinstance(abstract, str)):
+            and isinstance(abstract, str) and isinstance(abstract_source, str)):
         raise HTTPException(400, "payload 字段不合法")
     errors = pv.validate(project)
     if errors:
@@ -183,17 +185,17 @@ async def ingest(request: Request):
         if not stale:   # 迟到的旧提交只留快照，不覆盖当前状态
             dump = lambda v: json.dumps(v, ensure_ascii=False)
             con.execute(
-                "INSERT INTO projects (id, title, owner, stage, summary, abstract, members_json, tags_json, "
+                "INSERT INTO projects (id, title, owner, stage, summary, abstract, abstract_source, members_json, tags_json, "
                 "milestones_json, blockers_json, commits_json, repo, last_sha, last_commit_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
                 "title=excluded.title, owner=excluded.owner, stage=excluded.stage, summary=excluded.summary, "
-                "abstract=excluded.abstract, "
+                "abstract=excluded.abstract, abstract_source=excluded.abstract_source, "
                 "members_json=excluded.members_json, tags_json=excluded.tags_json, "
                 "milestones_json=excluded.milestones_json, blockers_json=excluded.blockers_json, "
                 "commits_json=excluded.commits_json, repo=excluded.repo, last_sha=excluded.last_sha, "
                 "last_commit_at=excluded.last_commit_at, updated_at=excluded.updated_at",
                 (pid, project["title"], project["owner"], project["stage"], project.get("summary", ""),
-                 abstract[:MAX_ABSTRACT],
+                 abstract[:MAX_ABSTRACT], abstract_source[:200] if abstract else "",
                  dump(project.get("members") or []), dump(project.get("tags") or []),
                  dump(project.get("milestones") or []), dump(project.get("blockers") or []),
                  dump(commits[:20]), repo, sha, last_commit_at, now_iso))
@@ -269,9 +271,23 @@ def resolve_target(t, deadlines, now):
     return out
 
 
+def description(row):
+    """项目描述及其来源，按优先级: 论文摘要 -> STATE.md 的 thesis -> 作者填写的 summary。
+
+    前两级由 CI 判定并放在 abstract 里，这里只需再用 summary 兜底。
+    kind: abstract | state | summary | ''（都没有）
+    """
+    if row["abstract"]:
+        kind = "abstract" if row["abstract_source"].endswith(".tex") else "state"
+        return {"text": row["abstract"], "kind": kind, "source": row["abstract_source"]}
+    if row["summary"]:
+        return {"text": row["summary"], "kind": "summary", "source": "project.yaml"}
+    return {"text": "", "kind": "", "source": ""}
+
+
 def blurb(row, limit=220):
-    """卡片上的简短说明：优先用作者写的一句话，没有就截取摘要开头。"""
-    text = row["summary"] or row["abstract"].split("\n\n")[0]
+    """卡片上的简短说明：项目描述的第一段，过长则截断。"""
+    text = description(row)["text"].split("\n\n")[0]
     return text if len(text) <= limit else text[:limit].rstrip() + "…"
 
 
@@ -297,7 +313,7 @@ def project_view(row, targets, deadlines, now, detail=False):
         "_last": last,
     }
     if detail:
-        view.update(abstract=row["abstract"], blockers=blockers, milestones=json.loads(row["milestones_json"]),
+        view.update(description=description(row), blockers=blockers, milestones=json.loads(row["milestones_json"]),
                     commits=json.loads(row["commits_json"]), targets=resolved)
     return view
 

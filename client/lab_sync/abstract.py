@@ -1,6 +1,11 @@
-"""从论文的 LaTeX 源文件里提取摘要，转成纯文本。只依赖标准库。
+"""取项目的文字描述。只依赖标准库。
 
-查找顺序:
+来源按优先级（describe() 实现这个顺序）:
+    1. 论文摘要：从 LaTeX 源文件提取并转成纯文本
+    2. STATE.md 里的 thesis 一行
+    3. 都没有时返回空，由看板改用 project.yaml 里作者填写的 summary
+
+摘要的查找顺序:
     1. project.yaml 里 abstract_file 指定的文件
     2. 约定路径（见 DEFAULT_FILES），取第一个存在且含有效摘要的
 
@@ -18,6 +23,10 @@ DEFAULT_FILES = (
     "abstract.tex", "paper/main.tex", "main.tex",
 )
 MIN_CHARS, MAX_CHARS = 80, 4000
+STATE_FILE = "STATE.md"
+STATE_MIN_CHARS, STATE_MAX_CHARS = 40, 1500
+# "- **One-sentence thesis (hypothesis):** ..." / "- **Working thesis:** ..."
+_THESIS_RE = re.compile(r"^- \*\*[^*\n]*thesis[^*\n]*:\*\*[ \t]*(.*)$", re.I)
 
 SYMBOLS = {
     "to": "→", "rightarrow": "→", "times": "×", "ge": "≥", "geq": "≥", "le": "≤", "leq": "≤",
@@ -173,3 +182,39 @@ def extract(repo_dir=".", abstract_file=None):
                 text = text[:MAX_CHARS].rstrip() + "…"
             return text, rel
     return None, None
+
+
+def from_state(repo_dir="."):
+    """STATE.md 里的 thesis 条目（含缩进的续行），去掉 Markdown 标记。没有返回 (None, None)。"""
+    path = os.path.join(repo_dir, STATE_FILE)
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None, None
+    for i, line in enumerate(lines):
+        m = _THESIS_RE.match(line)
+        if not m:
+            continue
+        parts = [m.group(1)]
+        for cont in lines[i + 1:]:
+            if not cont.startswith((" ", "\t")) or not cont.strip():
+                break                       # 续行必须缩进；空行或下一个条目就结束
+            parts.append(cont.strip())
+        text = " ".join(p for p in parts if p)
+        text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)      # [文字](链接) -> 文字
+        text = re.sub(r"[*`]", "", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        if len(text) >= STATE_MIN_CHARS:
+            if len(text) > STATE_MAX_CHARS:
+                text = text[:STATE_MAX_CHARS].rstrip() + "…"
+            return text, STATE_FILE
+    return None, None
+
+
+def describe(repo_dir=".", abstract_file=None):
+    """按优先级取描述: 论文摘要 -> STATE.md 的 thesis。返回 (文本, 来源路径) 或 (None, None)。"""
+    text, source = extract(repo_dir, abstract_file)
+    if text:
+        return text, source
+    return from_state(repo_dir)

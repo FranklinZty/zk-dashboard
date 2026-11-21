@@ -4,6 +4,7 @@
 const STAGES = { idea: '选题', design: '设计', implementation: '实现', writing: '写作',
   submitted: '已投稿', revision: '修改', accepted: '已录用', paused: '暂停' };
 const ROLES = { target: '目标', backup: '备选', submitted: '已投' };
+const DESC_LABEL = { abstract: '摘要', state: '项目描述', summary: '一句话说明' };
 const MS_STATUS = { todo: '未开始', doing: '进行中', done: '已完成' };
 const DAY = 86400000;
 const app = document.getElementById('app');
@@ -183,6 +184,7 @@ async function renderProject(id) {
   const todayYmd = `${today.year}-${today.month}-${today.day}`;
   const repoUrl = 'https://github.com/' + p.repo.split('/').map(encodeURIComponent).join('/');
   const exempt = ['submitted', 'accepted', 'paused'].includes(p.stage);
+  const desc = p.description || { text: '' };
   const list = (rows, head, empty) => rows.length
     ? `<table><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`
     : `<p class="muted">${empty}</p>`;
@@ -190,10 +192,10 @@ async function renderProject(id) {
   app.innerHTML = `
     <p class="small"><a href="/">← 返回总览</a></p>
     <h1>${esc(p.title)} <span class="pill stage">${esc(STAGES[p.stage] || p.stage)}</span></h1>
-    ${p.summary ? `<p class="muted">${esc(p.summary)}</p>` : ''}
-    ${p.abstract ? `<h2>摘要</h2><div class="card abstract">${
-      p.abstract.split(/\n\s*\n/).map(x => `<p>${esc(x)}</p>`).join('')}</div>`
-      : p.summary ? '' : '<p class="muted small">还没有摘要，也没有填写一句话说明。</p>'}
+    ${desc.text ? `<h2>${DESC_LABEL[desc.kind] || '项目描述'}
+        <span class="muted small" style="font-weight:400">取自 ${esc(desc.source)}</span></h2>
+      <div class="card abstract">${desc.text.split(/\n\s*\n/).map(x => `<p>${esc(x)}</p>`).join('')}</div>`
+      : '<p class="muted small">论文还没有摘要，STATE.md 里没有 thesis，project.yaml 里也没有填写 summary。</p>'}
     <h2>基本信息</h2>
     <div class="card"><dl class="kv">
       <dt>负责人</dt><dd>${esc(p.owner)}</dd>

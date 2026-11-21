@@ -45,13 +45,14 @@ class ServerTest(unittest.TestCase):
         self.ctx.__exit__(None, None, None)
         srv.now_cst = self._real_now
 
-    def push(self, pid, days_ago=1, sha=None, secret="test-secret", ts=None, abstract=None, **project):
+    def push(self, pid, days_ago=1, sha=None, secret="test-secret", ts=None, abstract=None,
+             abstract_source="paper/sections/abstract.tex", **project):
         commit_at = (NOW - dt.timedelta(days=days_ago)).isoformat(timespec="seconds")
         sha = sha or (pid.encode().hex() + "0" * 40)[:40]
         body = json.dumps({
             "payload_version": 1, "project_id": pid, "repo": f"lab/{pid}", "sha": sha,
             "source": "push", "last_commit_at": commit_at,
-            **({} if abstract is None else {"abstract": abstract}),
+            **({} if abstract is None else {"abstract": abstract, "abstract_source": abstract_source}),
             "project": {"schema": 1, "title": pid.upper(), "owner": "alice", "stage": "implementation",
                         **project},
             "commits": [{"sha": sha, "author": "a", "date": commit_at, "message": "m"}],
@@ -213,27 +214,40 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.ids("?due=7"), [])
 
     # ---- 摘要 ----
-    def test_abstract_is_stored_and_card_blurb_prefers_summary(self):
+    def test_description_priority_abstract_then_state_then_summary(self):
         long_abs = "First paragraph of the abstract. " * 12 + "\n\nSecond paragraph."
-        self.push("with-abs", abstract=long_abs)
-        self.push("with-both", abstract=long_abs, summary="作者写的一句话")
-        self.push("with-none")
+        self.push("from-tex", abstract=long_abs, summary="作者写的一句话")
+        self.push("from-state", abstract="Thesis from the state file.", abstract_source="STATE.md",
+                  summary="作者写的一句话")
+        self.push("from-summary", summary="作者写的一句话")
+        self.push("nothing")
+
+        def desc(pid):
+            return self.c.get(f"/api/v1/projects/{pid}").json()["project"]["description"]
+
+        self.assertEqual(desc("from-tex"), {"text": long_abs, "kind": "abstract",
+                                            "source": "paper/sections/abstract.tex"})
+        self.assertEqual((desc("from-state")["kind"], desc("from-state")["source"]), ("state", "STATE.md"))
+        self.assertEqual(desc("from-summary"), {"text": "作者写的一句话", "kind": "summary",
+                                                "source": "project.yaml"})
+        self.assertEqual(desc("nothing")["kind"], "")
+
         cards = {p["id"]: p["blurb"] for p in self.projects()["projects"]}
-        self.assertTrue(cards["with-abs"].startswith("First paragraph") and cards["with-abs"].endswith("…"))
-        self.assertLessEqual(len(cards["with-abs"]), 221)
-        self.assertEqual((cards["with-both"], cards["with-none"]), ("作者写的一句话", ""))
-        detail = self.c.get("/api/v1/projects/with-abs").json()["project"]
-        self.assertEqual(detail["abstract"], long_abs)
-        self.assertNotIn("abstract", self.projects()["projects"][0])      # 列表里不带全文
+        self.assertTrue(cards["from-tex"].startswith("First paragraph") and cards["from-tex"].endswith("…"))
+        self.assertLessEqual(len(cards["from-tex"]), 221)
+        self.assertEqual((cards["from-state"], cards["from-summary"], cards["nothing"]),
+                         ("Thesis from the state file.", "作者写的一句话", ""))
+        self.assertNotIn("description", self.projects()["projects"][0])   # 列表里不带全文
         self.assertEqual(self.push("bad", abstract=["not", "text"]).status_code, 400)
 
     def test_database_created_before_abstracts_is_upgraded(self):
         with closing(srv.connect()) as con:
             con.execute("ALTER TABLE projects DROP COLUMN abstract")
+            con.execute("ALTER TABLE projects DROP COLUMN abstract_source")
             con.commit()
         srv.init_db()
         self.assertEqual(self.push("p1", abstract="x" * 100).status_code, 200)
-        self.assertEqual(self.c.get("/api/v1/projects/p1").json()["project"]["abstract"], "x" * 100)
+        self.assertEqual(self.c.get("/api/v1/projects/p1").json()["project"]["description"]["text"], "x" * 100)
 
     # ---- 访问密码 ----
     def test_view_password_protects_pages_but_not_ingest(self):

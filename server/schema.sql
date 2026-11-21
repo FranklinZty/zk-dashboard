@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS projects (
     owner           TEXT NOT NULL,
     stage           TEXT NOT NULL,
     summary         TEXT NOT NULL DEFAULT '',
-    abstract        TEXT NOT NULL DEFAULT '',    -- 论文摘要纯文本，CI 从 tex 提取
+    abstract        TEXT NOT NULL DEFAULT '',    -- CI 取到的描述：论文摘要，或 STATE.md 的 thesis
+    abstract_source TEXT NOT NULL DEFAULT '',    -- 它取自哪个文件
     members_json    TEXT NOT NULL DEFAULT '[]',
     tags_json       TEXT NOT NULL DEFAULT '[]',
     milestones_json TEXT NOT NULL DEFAULT '[]',

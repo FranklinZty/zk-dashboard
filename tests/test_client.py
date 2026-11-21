@@ -175,6 +175,31 @@ class AbstractTest(unittest.TestCase):
         root = self.repo({"abstract.tex": self.LONG * 100})
         self.assertLessEqual(len(abstract.extract(root)[0]), abstract.MAX_CHARS + 1)
 
+    STATE = ("# STATE\n\n- **Phase:** P2\n"
+             "- **One-sentence thesis (hypothesis):** A composition of a *malleable* protocol and a\n"
+             "  recursive SNARK, see [notes](notes/x.md), supports `controlled` statement changes.\n"
+             "- **Last updated:** today\n\n## Gate P0\n- [x] thesis is one falsifiable sentence\n")
+
+    def test_state_thesis_with_continuation_lines(self):
+        root = self.repo({"STATE.md": self.STATE})
+        self.assertEqual(abstract.from_state(root), (
+            "A composition of a malleable protocol and a recursive SNARK, see notes, "
+            "supports controlled statement changes.", "STATE.md"))
+        other = self.repo({"STATE.md": "- **Working thesis:** " + self.LONG + "\n- **Paper type:** x\n"})
+        self.assertEqual(abstract.from_state(other)[0], self.LONG.strip())
+        self.assertEqual(abstract.from_state(self.repo({"STATE.md": "- **Phase:** P1\n"})), (None, None))
+        self.assertEqual(abstract.from_state(self.repo({"a.txt": "x"})), (None, None))
+
+    def test_description_prefers_abstract_then_state(self):
+        both = self.repo({"STATE.md": self.STATE,
+                          "paper/sections/abstract.tex": "\\begin{abstract}" + self.LONG + "\\end{abstract}"})
+        self.assertEqual(abstract.describe(both)[1], "paper/sections/abstract.tex")
+        # 摘要还是模板时，退到 STATE.md
+        template = self.repo({"STATE.md": self.STATE,
+                              "paper/sections/abstract.tex": "\\begin{abstract}<<todo>>" + self.LONG + "\\end{abstract}"})
+        self.assertEqual(abstract.describe(template)[1], "STATE.md")
+        self.assertEqual(abstract.describe(self.repo({"a.txt": "x"})), (None, None))
+
     def test_abstract_file_field_is_validated(self):
         self.assertEqual(v.validate({**base(), "abstract_file": "paper/sections/abstract.tex"}), [])
         for bad in ("../secret.tex", "/etc/passwd.tex", "paper/abstract.md", 3):

@@ -18,7 +18,7 @@
 | `stage` | 是 | 枚举 | 见下方「阶段」 |
 | `members` | 否 | 字符串列表 | 参与者的 GitHub 用户名，不必重复写 owner |
 | `tags` | 否 | 字符串列表 | 供筛选，小写字母、数字、连字符 |
-| `summary` | 否 | 字符串 | 一句话说明，最多 300 字符。论文还没有摘要时必须填 |
+| `summary` | 否 | 字符串 | 一句话说明，最多 300 字符。论文没有摘要、STATE.md 里也没有 thesis 时才需要填 |
 | `abstract_file` | 否 | 字符串 | 摘要所在的 .tex 文件，相对仓库根目录。不填则按约定路径自动查找 |
 | `milestones` | 否 | 列表 | 见下方 |
 | `blockers` | 否 | 列表 | 见下方。列表非空即视为「阻塞」 |
@@ -26,18 +26,22 @@
 
 出现未列出的字段会校验失败，防止拼写错误被悄悄忽略。
 
-## 摘要
+## 项目描述的来源
 
-论文摘要不用写进 `project.yaml`，CI 每次推送时直接从 tex 源文件里取，论文改了看板跟着变。
+看板上每个项目的描述按下面的顺序取，用第一个有内容的：
 
-查找顺序：
+1. **论文摘要**：CI 从 tex 源文件里提取，论文改了看板跟着变。
+2. **STATE.md 的 thesis**：仓库根目录 `STATE.md` 里形如 `- **One-sentence thesis ...:** ...` 或 `- **Working thesis:** ...` 的条目。
+3. **`summary`**：前两者都没有时，由作者在 `project.yaml` 里填写。三者都没有，CI 会给出警告。
+
+摘要的查找顺序：
 
 1. `abstract_file` 指定的文件。
 2. 约定路径，取第一个存在且含有效摘要的：`paper/sections/abstract.tex`、`paper/abstract.tex`、`sections/abstract.tex`、`abstract.tex`、`paper/main.tex`、`main.tex`。
 
 文件里有 `\begin{abstract}...\end{abstract}` 就取其中的内容；没有该环境但文件名是 `abstract.tex` 则取整个文件。LaTeX 命令会被转成纯文本，引用和脚注被去掉。
 
-还是模板占位符（含 `<<...>>`）或不足 80 字符的内容不算摘要。这种情况下看板显示 `summary`；两者都没有时 CI 会给出警告。
+还是模板占位符（含 `<<...>>`）或不足 80 字符的内容不算摘要，会继续往下一级来源找。
 
 ## 阶段（stage）
 

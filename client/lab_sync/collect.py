@@ -65,9 +65,9 @@ def build_payload(doc, repo_dir="."):
     commits = recent_commits(repo_dir)
     if not commits:
         raise RuntimeError("仓库里没有提交")
-    text, source = abstract.extract(repo_dir, doc.get("abstract_file"))
+    text, source = abstract.describe(repo_dir, doc.get("abstract_file"))
     return {
-        "abstract": text or "",              # 论文摘要的纯文本，取自 abstract_source
+        "abstract": text or "",              # 论文摘要；没有摘要时是 STATE.md 的 thesis。来源见 abstract_source
         "abstract_source": source or "",
         "payload_version": PAYLOAD_VERSION,
         "project_id": repo.split("/")[-1].lower(),
@@ -100,12 +100,12 @@ def main(argv=None):
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     if payload["abstract"]:
-        print(f"摘要取自 {payload['abstract_source']}（{len(payload['abstract'])} 字符）")
+        kind = "摘要" if payload["abstract_source"].endswith(".tex") else "项目描述"
+        print(f"{kind}取自 {payload['abstract_source']}（{len(payload['abstract'])} 字符）")
+    elif doc.get("summary"):
+        print("论文没有摘要，STATE.md 里也没有 thesis，看板将显示 project.yaml 里的 summary")
     else:
-        wanted = doc.get("abstract_file")
-        msg = (f"{wanted} 里没有找到有效的摘要" if wanted else "没有找到论文摘要") + (
-            "，看板将显示 summary" if doc.get("summary")
-            else "，project.yaml 里也没有 summary；请补一句话说明")
+        msg = "没有论文摘要，STATE.md 里也没有 thesis；请在 project.yaml 里填写 summary"
         if os.environ.get("GITHUB_ACTIONS") == "true":
             print(f"::warning file={args.path}::{msg}")
         else:
