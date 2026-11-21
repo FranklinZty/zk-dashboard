@@ -1,0 +1,25 @@
+[Unit]
+Description=Lab dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=lab
+Group=lab
+WorkingDirectory=/opt/lab-dashboard
+EnvironmentFile=/etc/lab-dashboard.env
+ExecStart=/opt/lab-dashboard/.venv/bin/python -m uvicorn server.app:app --host 0.0.0.0 --port 80
+Restart=always
+RestartSec=3
+
+# 以普通用户运行，只额外给绑定 80 端口的能力
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/lab-dashboard
+
+[Install]
+WantedBy=multi-user.target

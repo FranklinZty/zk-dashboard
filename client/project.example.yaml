@@ -1,0 +1,34 @@
+# 复制到项目仓库根目录并改名为 project.yaml
+# 规范见 docs/project-yaml.md；日期一律为北京时间 YYYY-MM-DD
+schema: 1
+title: 示例：基于折叠方案的可更新证明
+owner: your-github-login
+stage: implementation   # idea | design | implementation | writing | submitted | revision | accepted | paused
+members:
+  - teammate-login
+tags:
+  - zk
+  - folding
+summary: 一句话说明这个项目在做什么。
+
+milestones:
+  - title: 完成基线复现
+    status: done          # todo | doing | done
+    due: 2026-12-15
+  - title: 主实验
+    status: doing
+    due: 2027-01-20
+
+blockers:
+  - text: 等待 GPU 配额
+    since: 2026-11-10
+    owner: your-github-login
+
+targets:
+  # 会议：只写 ccfddl.com 的 id，日期自动同步（firm）
+  - venue: eurocrypt27
+    role: target          # target | backup | submitted
+  # 期刊：写名称和预计投稿日期
+  - journal: IEEE TIFS
+    planned: 2027-03-15
+    role: backup

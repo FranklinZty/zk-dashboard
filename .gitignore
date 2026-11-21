@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+received/
+payload.json
+*.db
+*.db-wal
+*.db-shm
+.env
+.DS_Store

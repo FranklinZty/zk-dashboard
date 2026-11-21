@@ -1,0 +1,61 @@
+# 复制到项目仓库的 .github/workflows/lab-sync.yml
+#
+# 仓库需要配置两个 Secret（Settings → Secrets and variables → Actions）:
+#   LAB_SYNC_URL     看板推送地址，如 http://<服务器IP>/api/v1/ingest
+#   LAB_SYNC_SECRET  全组共用的签名密钥
+#
+# 使用前把下面的 LAB_TOOLS_REPO 改成存放 zk-dashboard 的仓库（需为公开仓库）。
+name: lab-sync
+
+on:
+  push:
+    branches: [main, master]
+  schedule:
+    - cron: "17 19 * * *"   # 每天北京时间 03:17 全量重推，用于补齐服务器停机期间的缺口
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lab-sync
+  cancel-in-progress: true
+
+env:
+  LAB_TOOLS_REPO: OWNER/zk-dashboard
+  LAB_TOOLS_REF: main
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 20
+
+      - name: 获取同步脚本
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.LAB_TOOLS_REPO }}
+          ref: ${{ env.LAB_TOOLS_REF }}
+          path: .lab-tools
+          sparse-checkout: client/lab_sync
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install --quiet pyyaml
+
+      - name: 校验 project.yaml
+        run: python .lab-tools/client/lab_sync/validate.py project.yaml --check-venues
+
+      - name: 采集
+        run: python .lab-tools/client/lab_sync/collect.py project.yaml -o "$RUNNER_TEMP/payload.json"
+
+      - name: 推送到看板
+        env:
+          LAB_SYNC_URL: ${{ secrets.LAB_SYNC_URL }}
+          LAB_SYNC_SECRET: ${{ secrets.LAB_SYNC_SECRET }}
+        run: python .lab-tools/client/lab_sync/push.py "$RUNNER_TEMP/payload.json"
