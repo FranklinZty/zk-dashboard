@@ -54,6 +54,31 @@ def _strip_comments(text):
     return re.sub(r"(?<!\\)%.*", "", text)
 
 
+_COND_RE = re.compile(r"\\(if[A-Za-z@]*|else|fi)(?![A-Za-z@])")
+
+
+def _strip_iffalse(text):
+    """去掉 \\iffalse ... \\fi 之间被关掉的内容（支持嵌套的 \\if...；有 \\else 时保留 else 分支）。"""
+    out, pos, depth = [], 0, 0          # depth > 0 表示正处在被关掉的区域里
+    for m in _COND_RE.finditer(text):
+        name = m.group(1)
+        if name == "iff":               # \iff 是数学符号，不是条件
+            continue
+        if depth == 0:
+            if name == "iffalse":
+                out.append(text[pos:m.start()])
+                depth = 1
+        elif name.startswith("if"):
+            depth += 1
+        elif name == "fi" or depth == 1:    # \fi，或最外层的 \else
+            depth -= 1
+            if depth == 0:
+                pos = m.end()
+    if depth == 0:
+        out.append(text[pos:])
+    return "".join(out)
+
+
 def _balanced(text, start):
     """text[start] 是 '{'，返回 (花括号内的内容, 右花括号之后的位置)；不配对返回 None。"""
     depth = 0
@@ -114,7 +139,7 @@ def find_macros(tex_sources):
 
 def to_plain(tex, macros=None):
     """LaTeX 片段 -> 纯文本。段落用空行分隔。"""
-    text = _DIFDEL_BLOCK_RE.sub("", _strip_comments(tex))
+    text = _DIFDEL_BLOCK_RE.sub("", _strip_iffalse(_strip_comments(tex)))
     macros = macros or {}
     for _ in range(3):   # 自定义命令可能嵌套
         text, n = re.subn(r"\\([A-Za-z]+)(\{\})?",
@@ -141,7 +166,7 @@ def to_plain(tex, macros=None):
 
 def _body(path):
     with open(path, encoding="utf-8", errors="replace") as f:
-        src = f.read()
+        src = _strip_iffalse(_strip_comments(f.read()))   # 注释掉或 \\iffalse 关掉的摘要不算
     m = re.search(r"\\begin\{abstract\}(.*?)\\end\{abstract\}", src, re.S)
     if m:
         return m.group(1)

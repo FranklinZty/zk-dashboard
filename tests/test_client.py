@@ -161,6 +161,20 @@ class AbstractTest(unittest.TestCase):
         self.assertTrue(text.endswith("We call it Vicuna."), text)
         self.assertNotIn("keywords", text)
 
+    def test_iffalse_blocks_are_dropped(self):
+        self.assertEqual(abstract.to_plain("Keep. \\iffalse old \\ifx a b c \\fi draft \\fi Tail $a \\iff b$."),
+                         "Keep. Tail a b.")
+        self.assertEqual(abstract.to_plain("A \\iffalse off \\else on \\fi B"), "A on B")
+        root = self.repo({
+            "main.tex": "\\input{abs}\n\\iffalse\n\\begin{abstract}" + self.LONG + "Disabled.\\end{abstract}\n\\fi\n",
+            "abs.tex": "\\begin{abstract}\n" + self.LONG + "Live.\n\\iffalse\n" + self.LONG
+                       + "Old draft.\n\\fi\n\\end{abstract}\n",
+        })
+        self.assertEqual(abstract.extract(root), (None, None))
+        text, _ = abstract.extract(root, "abs.tex")
+        self.assertTrue(text.endswith("Live."))
+        self.assertNotIn("Old draft", text)
+
     def test_template_placeholder_and_short_text_are_not_abstracts(self):
         root = self.repo({
             "paper/sections/abstract.tex": "\\begin{abstract}<<Field consensus sentence.>> "
